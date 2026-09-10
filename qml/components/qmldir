@@ -1,0 +1,6 @@
+module components
+
+SingerPanel 1.0 SingerPanel.qml
+SongDatabasePanel 1.0 SongDatabasePanel.qml
+SingerQueuePanel 1.0 SingerQueuePanel.qml
+DeckPanel 1.0 DeckPanel.qml
