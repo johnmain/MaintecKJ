@@ -12,14 +12,14 @@ FolderScanner::FolderScanner(QObject *parent)
 
 void FolderScanner::initializePatterns()
 {
-    // Pattern 1: {Artist} - {Title}
-    m_patterns.append(QRegularExpression(QStringLiteral("^(.*?)\s*-\s*(.*)$")));
+    // Pattern 1: {Track} - {Artist} - {Title} (most specific, tried first)
+    m_patterns.append(QRegularExpression(QStringLiteral(R"(^(.*?)\s*-\s*(.*?)\s*-\s*(.*)$)")));
     
-    // Pattern 2: {Title} - {Artist}
-    m_patterns.append(QRegularExpression(QStringLiteral("^(.*?)\s*-\s*(.*)$")));
+    // Pattern 2: {Artist} - {Title}
+    m_patterns.append(QRegularExpression(QStringLiteral(R"(^(.*?)\s*-\s*(.*)$)")));
     
-    // Pattern 3: {Track} - {Artist} - {Title}
-    m_patterns.append(QRegularExpression(QStringLiteral("^(.*?)\s*-\s*(.*?)\s*-\s*(.*)$")));
+    // Pattern 3: {Title} - {Artist} (same textual shape as Pattern 2, kept for explicit selection)
+    m_patterns.append(QRegularExpression(QStringLiteral(R"(^(.*?)\s*-\s*(.*)$)")));
 }
 
 QStringList FolderScanner::supportedExtensions() const
@@ -73,21 +73,91 @@ ParsedSong FolderScanner::parseFileName(const QString &fileName)
     parsed.isVideoFile = false;
     parsed.isZipArchive = false;
 
-    QString baseName = QFileInfo(fileName).completeBaseName();
-    
-    // Try each pattern
-    for (const QRegularExpression &pattern : m_patterns) {
-        if (matchesPattern(baseName, pattern)) {
-            parsed.artist = extractArtistFromPattern(baseName, pattern);
-            parsed.title = extractTitleFromPattern(baseName, pattern);
-            break;
+    const QString baseName = QFileInfo(fileName).completeBaseName().trimmed();
+
+    // Split on a spaced hyphen so artist/title separators work regardless of spacing.
+    const QStringList parts = baseName.split(QRegularExpression(QStringLiteral(R"(\s+-\s+)")),
+                                             Qt::SkipEmptyParts);
+
+    auto cleanTitle = [](QString title) {
+        static const QList<QRegularExpression> patterns = {
+            QRegularExpression(QStringLiteral(R"(\s*[-–—]\s*karaoke\s+version\s+from\s+.+$)"),
+                               QRegularExpression::CaseInsensitiveOption),
+            QRegularExpression(QStringLiteral(R"(\s*[-–—]\s*karaoke(\s+version)?\s*$)"),
+                               QRegularExpression::CaseInsensitiveOption),
+            QRegularExpression(QStringLiteral(R"(\s*\(\s*karaoke(\s+version)?\s*\)\s*$)"),
+                               QRegularExpression::CaseInsensitiveOption),
+            QRegularExpression(QStringLiteral(R"(\s*\[[^\]]*\]\s*$)")),
+            QRegularExpression(QStringLiteral(R"(\s*[-–—]\s*(backing\s+track|instrumental|made\s+famous\s+by\s+.+)\s*$)"),
+                               QRegularExpression::CaseInsensitiveOption),
+            QRegularExpression(QStringLiteral(R"(\s*\(\s*(backing\s+track|instrumental)\s*\)\s*$)"),
+                               QRegularExpression::CaseInsensitiveOption)
+        };
+
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (const QRegularExpression &re : patterns) {
+                const QString before = title;
+                title.remove(re);
+                title = title.trimmed();
+                if (title != before)
+                    changed = true;
+            }
         }
+        return title;
+    };
+
+    QString source;
+
+    // Source hint 1: a trailing bracketed disc/tag, e.g. "... [#Z Karaoke]" or "... [Zoom]"
+    {
+        static const QRegularExpression bracketRe(QStringLiteral(R"(\[([^\]]+)\]\s*$)"));
+        const QRegularExpressionMatch bracketMatch = bracketRe.match(baseName);
+        if (bracketMatch.hasMatch())
+            source = bracketMatch.captured(1).trimmed();
     }
 
-    // If no pattern matched, use the whole baseName as title
-    if (parsed.title == "Unknown Title") {
+    if (parts.size() >= 3) {
+        // Only treat as {Track} - {Artist} - {Title} when the first part is a track number.
+        static const QRegularExpression trackRe(QStringLiteral(R"(^\s*\d{1,3}\s*[\.,\)]?\s*$)"));
+        const bool trackNumbered = trackRe.match(parts.at(0)).hasMatch();
+
+        if (trackNumbered) {
+            parsed.artist = parts.at(1).trimmed();
+            parsed.title = parts.mid(2).join(QStringLiteral(" - ")).trimmed();
+        } else {
+            parsed.artist = parts.at(0).trimmed();
+            parsed.title = parts.mid(1).join(QStringLiteral(" - ")).trimmed();
+
+            // Source hint 2: a trailing " - <disc>" segment (e.g. "... - Karaoke Version from Zoom Karaoke")
+            if (source.isEmpty()) {
+                const QString segment = parts.mid(2).join(QStringLiteral(" - ")).trimmed();
+                static const QRegularExpression fromRe(
+                    QStringLiteral(R"(^\s*(?:karaoke\s+version\s+)?(?:from|by)\s+(.+)$)"),
+                    QRegularExpression::CaseInsensitiveOption);
+                const QRegularExpressionMatch fromMatch = fromRe.match(segment);
+                if (fromMatch.hasMatch())
+                    source = fromMatch.captured(1).trimmed();
+                else if (!segment.isEmpty())
+                    source = segment;
+            }
+        }
+    } else if (parts.size() == 2) {
+        parsed.artist = parts.at(0).trimmed();
+        parsed.title = parts.at(1).trimmed();
+    } else {
         parsed.title = baseName;
     }
+
+    parsed.title = cleanTitle(parsed.title);
+    parsed.artist = parsed.artist.trimmed();
+    parsed.source = source;
+
+    if (parsed.artist.isEmpty())
+        parsed.artist = "Unknown Artist";
+    if (parsed.title.isEmpty())
+        parsed.title = baseName;
 
     return parsed;
 }
@@ -114,10 +184,11 @@ QString FolderScanner::extractArtistFromPattern(const QString &fileName, const Q
 {
     QRegularExpressionMatch match = pattern.match(fileName);
     if (match.hasMatch()) {
-        int capCount = pattern.captureCount();
-        if (capCount >= 2) {
-            return match.captured(1).trimmed();
-        }
+        const int capCount = pattern.captureCount();
+        if (capCount >= 3)
+            return match.captured(2).trimmed(); // {Track} - {Artist} - {Title}
+        if (capCount >= 2)
+            return match.captured(1).trimmed(); // {Artist} - {Title}
     }
     return "Unknown Artist";
 }
@@ -129,11 +200,9 @@ QString FolderScanner::extractTitleFromPattern(const QString &fileName, const QR
         int capCount = pattern.captureCount();
         if (capCount >= 2) {
             // For 3-part pattern (Track - Artist - Title), title is captured(3)
-            if (capCount >= 3 && pattern.pattern().contains("-")) {
-                return match.captured(capCount).trimmed();
-            } else {
-                return match.captured(2).trimmed();
-            }
+            if (capCount >= 3)
+                return match.captured(3).trimmed();
+            return match.captured(2).trimmed();
         }
     }
     return "Unknown Title";
@@ -195,7 +264,16 @@ QStringList FolderScanner::getAllFiles(const QString &directoryPath, bool recurs
 QStringList FolderScanner::getFilesByExtension(const QString &directoryPath, const QString &extension, bool recursive)
 {
     QStringList files;
-    QDirIterator iterator(directoryPath, {extension}, recursive ? QDirIterator::Subdirectories : QDirIterator::NoIteratorFlags);
+    QStringList extensions;
+    extensions << extension;
+    
+    // Use QDirIterator with QDir::Files filter
+    QDir::Filters filters = QDir::Files;
+    if (extension == "mp3" || extension == "cdg") {
+        filters = filters | QDir::Readable;
+    }
+    
+    QDirIterator iterator(directoryPath, extensions, filters, QDirIterator::Subdirectories);
     
     while (iterator.hasNext()) {
         iterator.next();

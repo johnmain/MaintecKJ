@@ -1,30 +1,86 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Window
+import QtMultimedia
+import MaintecKJ 1.0
 
 Pane {
     id: deckPanel
-    SplitView.minimumWidth: 280
+    SplitView.minimumWidth: 250
     SplitView.preferredWidth: 320
     SplitView.maximumWidth: 480
+
+    function companionCdg(path) {
+        if (!path)
+            return ""
+        if (path.toLowerCase().endsWith(".mp3"))
+            return path.substring(0, path.length - 4) + ".cdg"
+        return ""
+    }
+
+    function formatTime(ms) {
+        var total = Math.floor(Number(ms) / 1000)
+        if (!total || total <= 0)
+            return "0:00"
+        var mins = Math.floor(total / 60)
+        var secs = total % 60
+        return mins + ":" + (secs < 10 ? "0" : "") + secs
+    }
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 12
 
+        // Secondary window mini-preview (CDG canvas / video)
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: width * (9 / 16)
             color: "#000000"
-            border.color: "#444444"
+            border.color: deckPanel.palette.mid
             border.width: 1
+
+            // Video takes the shared sink only while the secondary window is hidden.
+            VideoOutput {
+                id: miniVideo
+                anchors.fill: parent
+                anchors.margins: 1
+                fillMode: VideoOutput.PreserveAspectFit
+                visible: mediaPlayer.hasVideo
+            }
+
+            CdgRenderer {
+                id: cdgRenderer
+                anchors.fill: parent
+                anchors.margins: 1
+                visible: !mediaPlayer.hasVideo
+            }
 
             Label {
                 anchors.centerIn: parent
-                text: "Secondary Window Preview"
-                color: "#888888"
+                visible: !mediaPlayer.hasVideo && !cdgRenderer.loaded
+                text: "No Graphics Loaded"
+                color: "white"
+                opacity: 0.7
                 font.pixelSize: 13
+            }
+        }
+
+        // Keep CDG graphics locked to the audio player position.
+        Connections {
+            target: mediaPlayer
+            function onSourceChanged() {
+                cdgRenderer.setSource(deckPanel.companionCdg(mediaPlayer.filePath))
+                cdgRenderer.reset()
+            }
+            function onPlayingChanged() {
+                if (mediaPlayer.playing)
+                    cdgRenderer.start()
+                else
+                    cdgRenderer.stop()
+            }
+            function onPositionChanged() {
+                if (mediaPlayer.playing)
+                    cdgRenderer.syncToPosition(mediaPlayer.position)
             }
         }
 
@@ -37,9 +93,10 @@ Pane {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 1
-            color: "#333333"
+            color: deckPanel.palette.mid
         }
 
+        // Now playing + transport
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 6
@@ -51,61 +108,280 @@ Pane {
             }
 
             Label {
-                text: " Track Loaded"
+                text: mediaPlayer.hasMedia ? (mediaPlayer.title || "Unknown Title") : "No Track Loaded"
                 font.pixelSize: 14
-                color: "#aaaaaa"
                 elide: Text.ElideRight
                 Layout.fillWidth: true
             }
 
-            ProgressBar {
+            Label {
+                text: mediaPlayer.artist
+                font.pixelSize: 12
+                opacity: 0.7
+                elide: Text.ElideRight
                 Layout.fillWidth: true
-                value: 0.0
+                visible: mediaPlayer.artist.length > 0
             }
-        }
 
-        Item {
-            Layout.fillHeight: true
-        }
+            // Read-only progress indicator (no scrubbing). Use Stop + Play to
+            // restart a song instead.
+            ProgressBar {
+                id: progressBar
+                Layout.fillWidth: true
+                implicitHeight: 10
+                from: 0
+                to: Math.max(mediaPlayer.duration, 1)
+                value: mediaPlayer.position
+                enabled: mediaPlayer.duration > 0
+            }
 
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 8
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    text: deckPanel.formatTime(mediaPlayer.position)
+                    font.pixelSize: 11
+                    opacity: 0.7
+                }
+                Item { Layout.fillWidth: true }
+                Label {
+                    text: deckPanel.formatTime(mediaPlayer.duration)
+                    font.pixelSize: 11
+                    opacity: 0.7
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Button {
+                    text: mediaPlayer.playing ? "Pause" : "Play"
+                    Layout.fillWidth: true
+                    enabled: mediaPlayer.hasMedia
+                    onClicked: mediaPlayer.togglePlayPause()
+                }
+
+                Button {
+                    text: "Stop"
+                    Layout.fillWidth: true
+                    enabled: mediaPlayer.hasMedia
+                    onClicked: mediaPlayer.stop()
+                }
+            }
+
+            // DJ controller status. Left fader drives the tempo, right fader the
+            // key shift, right play/pause toggles playback.
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Label {
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    font.pixelSize: 11
+                    text: midiController.connected
+                          ? "\uD83C\uDF9B " + midiController.deviceName
+                          : "\uD83C\uDF9B No DJ controller"
+                    color: midiController.connected ? "#3DA639" : deckPanel.palette.windowText
+                    opacity: midiController.connected ? 0.95 : 0.55
+                }
+
+                Button {
+                    text: midiController.enabled ? "On" : "Off"
+                    font.pixelSize: 10
+                    implicitWidth: 42
+                    implicitHeight: 22
+                    checkable: true
+                    checked: midiController.enabled
+                    onClicked: midiController.enabled = checked
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Enable or disable the DJ controller"
+                }
+
+                Button {
+                    text: "\u27F3"
+                    font.pixelSize: 10
+                    implicitWidth: 26
+                    implicitHeight: 22
+                    enabled: !midiController.connected
+                    onClicked: midiController.rescan()
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Look for the controller again"
+                }
+            }
 
             Label {
-                text: "Key / Pitch Change"
-                font.bold: true
-                font.pixelSize: 12
-                color: "#cccccc"
-            }
-            RowLayout {
+                text: mediaPlayer.errorString
+                color: "#CC0000"
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
                 Layout.fillWidth: true
-                spacing: 2
-                Button { text: "-4"; Layout.fillWidth: true }
-                Button { text: "-3"; Layout.fillWidth: true }
-                Button { text: "-2"; Layout.fillWidth: true }
-                Button { text: "-1"; Layout.fillWidth: true }
-                Button { text: "0";  Layout.fillWidth: true; highlighted: true }
-                Button { text: "+1"; Layout.fillWidth: true }
-                Button { text: "+2"; Layout.fillWidth: true }
-                Button { text: "+3"; Layout.fillWidth: true }
-                Button { text: "+4"; Layout.fillWidth: true }
+                visible: mediaPlayer.errorString.length > 0
             }
+        }
 
-            RowLayout {
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 1
+            color: deckPanel.palette.mid
+        }
+
+        // Volume
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            Label { text: "Volume"; font.pixelSize: 12; Layout.preferredWidth: 60 }
+            Slider {
                 Layout.fillWidth: true
-                spacing: 10
-                Label { text: "Tempo"; font.pixelSize: 12 }
-                Slider { Layout.fillWidth: true; value: 0.5 }
+                from: 0
+                to: 100
+                stepSize: 1
+                value: mediaPlayer.volume
+                onMoved: mediaPlayer.setVolume(value)
             }
+            Label {
+                text: Math.round(mediaPlayer.volume) + "%"
+                font.pixelSize: 11
+                opacity: 0.7
+                Layout.preferredWidth: 40
+                horizontalAlignment: Text.AlignRight
+            }
+        }
+
+        // Tempo
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            Label { text: "Tempo"; font.pixelSize: 12; Layout.preferredWidth: 60 }
+            Slider {
+                Layout.fillWidth: true
+                from: 0.5
+                to: 2.0
+                stepSize: 0.05
+                value: mediaPlayer.tempo
+                onMoved: mediaPlayer.setTempo(value)
+            }
+            Label {
+                text: Number(mediaPlayer.tempo).toFixed(2) + "x"
+                font.pixelSize: 11
+                opacity: 0.7
+                Layout.preferredWidth: 40
+                horizontalAlignment: Text.AlignRight
+            }
+        }
+
+        // Pitch / key shift
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            Label { text: "Key Shift"; font.pixelSize: 12; Layout.preferredWidth: 60 }
+            Slider {
+                Layout.fillWidth: true
+                from: -6
+                to: 6
+                stepSize: 1
+                snapMode: Slider.SnapAlways
+                value: mediaPlayer.pitch
+                onMoved: mediaPlayer.setPitch(value)
+            }
+            Label {
+                text: (mediaPlayer.pitch > 0 ? "+" : "") + mediaPlayer.pitch + " st"
+                font.pixelSize: 11
+                opacity: 0.7
+                Layout.preferredWidth: 40
+                horizontalAlignment: Text.AlignRight
+            }
+        }
+
+        // Audio output device
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            Label { text: "Audio Out"; font.pixelSize: 12; Layout.preferredWidth: 60 }
+            ComboBox {
+                id: deviceCombo
+                Layout.fillWidth: true
+                model: mediaPlayer.audioDevices()
+                currentIndex: mediaPlayer.audioDeviceIndex
+                onActivated: mediaPlayer.setAudioDevice(index)
+            }
+        }
+
+        Item { Layout.fillHeight: true }
+    }
+
+    Component.onCompleted: mediaPlayer.setVideoSink(miniVideo.videoSink)
+
+    // Move the shared video sink to whichever output is currently visible.
+    Connections {
+        target: secondaryWindow
+        function onVisibleChanged() {
+            mediaPlayer.setVideoSink(secondaryWindow.visible ? secondaryVideo.videoSink : miniVideo.videoSink)
         }
     }
 
     Window {
         id: secondaryWindow
         title: "MaintecKJ - Display Output"
-        width: 800
-        height: 600
+        width: 960
+        height: 540
         visible: false
+        color: "black"
+
+        // Takes the shared video sink while this window is shown.
+        VideoOutput {
+            id: secondaryVideo
+            anchors.fill: parent
+            fillMode: VideoOutput.PreserveAspectFit
+            visible: mediaPlayer.hasVideo
+        }
+
+        CdgRenderer {
+            id: secondaryCdg
+            anchors.fill: parent
+            visible: !mediaPlayer.hasVideo
+        }
+
+        Label {
+            anchors.centerIn: parent
+            visible: !mediaPlayer.hasVideo && !secondaryCdg.loaded
+            text: "No Graphics Loaded"
+            color: "white"
+            opacity: 0.7
+            font.pixelSize: 24
+        }
+
+        Label {
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.margins: 12
+            text: "Press Esc to close"
+            color: "white"
+            opacity: 0.5
+            font.pixelSize: 12
+        }
+
+        Connections {
+            target: mediaPlayer
+            function onSourceChanged() {
+                secondaryCdg.setSource(deckPanel.companionCdg(mediaPlayer.filePath))
+                secondaryCdg.reset()
+            }
+            function onPlayingChanged() {
+                if (mediaPlayer.playing)
+                    secondaryCdg.start()
+                else
+                    secondaryCdg.stop()
+            }
+            function onPositionChanged() {
+                if (mediaPlayer.playing)
+                    secondaryCdg.syncToPosition(mediaPlayer.position)
+            }
+        }
+
+        Shortcut {
+            sequence: "Escape"
+            onActivated: secondaryWindow.hide()
+        }
     }
 }

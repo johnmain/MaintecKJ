@@ -15,6 +15,7 @@ struct ParsedSong {
     QString title;
     QString filePath;
     QString extension;
+    QString source;
     bool isCdgPair;
     bool isVideoFile;
     bool isZipArchive;

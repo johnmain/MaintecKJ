@@ -1,0 +1,260 @@
+#include "MediaPlayerController.h"
+#include "RubberBandAudioEngine.h"
+
+#include <QMediaPlayer>
+#include <QAudioOutput>
+#include <QMediaMetaData>
+#include <QVideoSink>
+#include <QFileInfo>
+#include <QUrl>
+#include <QDebug>
+
+MediaPlayerController::MediaPlayerController(QObject *parent)
+    : QObject(parent)
+    , m_player(new QMediaPlayer(this))
+    , m_audioOutput(new QAudioOutput(this))
+    , m_audio(new RubberBandAudioEngine(this))
+{
+    // The QMediaPlayer only supplies video frames, metadata and duration. Its own
+    // audio is silenced; the Rubber Band engine produces the audible audio.
+    m_player->setAudioOutput(m_audioOutput);
+    m_audioOutput->setVolume(0.0);
+
+    connect(m_player, &QMediaPlayer::mediaStatusChanged, this,
+            [this](QMediaPlayer::MediaStatus status) {
+                if (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia)
+                    updateMetadata();
+                emit hasVideoChanged();
+            });
+
+    connect(m_player, &QMediaPlayer::durationChanged, this,
+            [this](qint64) { emit durationChanged(); });
+
+    connect(m_player, &QMediaPlayer::errorOccurred, this,
+            [this](QMediaPlayer::Error, const QString &errorText) {
+                m_errorString = errorText;
+                emit errorChanged();
+                qWarning() << "MediaPlayer error:" << errorText;
+            });
+
+    connect(m_audio, &RubberBandAudioEngine::positionChanged, this, [this]() {
+        emit positionChanged();
+        syncVideoPosition();
+    });
+    connect(m_audio, &RubberBandAudioEngine::durationChanged, this,
+            [this]() { emit durationChanged(); });
+    connect(m_audio, &RubberBandAudioEngine::stateChanged, this,
+            [this]() { emit playingChanged(); });
+    // Natural end of the song (raised on the audio thread; delivered here on
+    // the main thread). Rotation listens to this to advance the next singer.
+    connect(m_audio, &RubberBandAudioEngine::finished, this, [this]() {
+        m_tempoTimer.stop();
+        emit songFinished();
+    });
+    connect(m_audio, &RubberBandAudioEngine::errorOccurred, this,
+            [this](const QString &message) {
+                m_errorString = message;
+                emit errorChanged();
+                qWarning() << "Audio engine error:" << message;
+            });
+
+    // Retune the (muted) video player's rate only after the tempo slider settles.
+    m_tempoTimer.setSingleShot(true);
+    m_tempoTimer.setInterval(250);
+    connect(&m_tempoTimer, &QTimer::timeout, this, [this]() {
+        if (m_playerIsVideo)
+            m_player->setPlaybackRate(m_audio->tempo());
+    });
+}
+
+int MediaPlayerController::position() const
+{
+    return m_audio->position();
+}
+
+int MediaPlayerController::duration() const
+{
+    const int d = m_audio->duration();
+    return d > 0 ? d : static_cast<int>(m_player->duration());
+}
+
+bool MediaPlayerController::playing() const
+{
+    return m_audio->isPlaying();
+}
+
+bool MediaPlayerController::hasVideo() const
+{
+    return m_player->hasVideo();
+}
+
+int MediaPlayerController::volume() const
+{
+    return m_audio->volume();
+}
+
+qreal MediaPlayerController::tempo() const
+{
+    return m_audio->tempo();
+}
+
+int MediaPlayerController::pitch() const
+{
+    return m_audio->semitones();
+}
+
+int MediaPlayerController::audioDeviceIndex() const
+{
+    return m_audio->audioDeviceIndex();
+}
+
+void MediaPlayerController::updateMetadata()
+{
+    const QMediaMetaData meta = m_player->metaData();
+
+    const QString metaTitle = meta.value(QMediaMetaData::Title).toString();
+    const QString metaArtist = meta.value(QMediaMetaData::ContributingArtist).toString();
+    const QString albumArtist = meta.value(QMediaMetaData::AlbumArtist).toString();
+
+    if (!metaTitle.isEmpty())
+        m_title = metaTitle;
+    if (!metaArtist.isEmpty())
+        m_artist = metaArtist;
+    else if (!albumArtist.isEmpty())
+        m_artist = albumArtist;
+
+    emit metadataChanged();
+}
+
+void MediaPlayerController::syncVideoPosition()
+{
+    if (!m_playerIsVideo || !m_player->hasVideo() || !playing())
+        return;
+    // Don't fight the player while a tempo change is settling.
+    if (m_tempoTimer.isActive())
+        return;
+
+    const qint64 audioPos = m_audio->position();
+    if (qAbs(m_player->position() - audioPos) > 500)
+        m_player->setPosition(audioPos);
+}
+
+void MediaPlayerController::load(const QString &filePath)
+{
+    if (filePath.isEmpty())
+        return;
+
+    m_filePath = filePath;
+    m_errorString.clear();
+
+    // Fall back to the filename until real tags are resolved.
+    const QFileInfo info(filePath);
+    m_title = info.completeBaseName();
+    m_artist.clear();
+
+    m_player->setSource(QUrl::fromLocalFile(filePath));
+    static const QStringList videoSuffixes = {
+        QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("avi"),
+        QStringLiteral("mov"), QStringLiteral("webm"), QStringLiteral("mpg"),
+        QStringLiteral("mpeg"), QStringLiteral("m4v"), QStringLiteral("wmv"),
+        QStringLiteral("flv"), QStringLiteral("ts"), QStringLiteral("m2ts")
+    };
+    m_playerIsVideo = videoSuffixes.contains(info.suffix().toLower());
+
+    // Only the video path keeps the (silent) QMediaPlayer audio output; for pure
+    // audio files the player is metadata-only and must not contribute sound.
+    m_player->setAudioOutput(m_playerIsVideo ? m_audioOutput : nullptr);
+    m_audioOutput->setVolume(0.0);
+    m_player->setPlaybackRate(m_audio->tempo());
+    m_audio->setSource(filePath);
+
+    emit sourceChanged();
+    emit metadataChanged();
+    emit hasVideoChanged();
+    emit durationChanged();
+    emit errorChanged();
+
+    play();
+}
+
+void MediaPlayerController::play()
+{
+    m_audio->play();
+    if (m_playerIsVideo)
+        m_player->play();
+}
+
+void MediaPlayerController::pause()
+{
+    m_audio->pause();
+    if (m_playerIsVideo)
+        m_player->pause();
+}
+
+void MediaPlayerController::stop()
+{
+    m_audio->stop();
+    if (m_playerIsVideo)
+        m_player->stop();
+}
+
+void MediaPlayerController::togglePlayPause()
+{
+    if (playing())
+        pause();
+    else
+        play();
+}
+
+void MediaPlayerController::seek(int positionMs)
+{
+    m_audio->seek(positionMs);
+    if (m_playerIsVideo)
+        m_player->setPosition(positionMs);
+}
+
+void MediaPlayerController::seekFraction(qreal fraction)
+{
+    const int total = duration();
+    if (total <= 0)
+        return;
+    seek(static_cast<int>(qBound<qreal>(0.0, fraction, 1.0) * total));
+}
+
+void MediaPlayerController::setVolume(int volume)
+{
+    m_audio->setVolume(volume);
+    emit volumeChanged();
+}
+
+void MediaPlayerController::setTempo(qreal tempo)
+{
+    m_audio->setTempo(tempo);
+    // Debounce the video rate change: retuning it on every slider tick makes the
+    // player jump/seek repeatedly.
+    m_tempoTimer.start();
+    emit tempoChanged();
+}
+
+void MediaPlayerController::setPitch(int semitones)
+{
+    m_audio->setSemitones(semitones);
+    emit pitchChanged();
+}
+
+QStringList MediaPlayerController::audioDevices() const
+{
+    return m_audio->audioDevices();
+}
+
+void MediaPlayerController::setAudioDevice(int index)
+{
+    m_audio->setAudioDevice(index);
+    emit audioDeviceChanged();
+}
+
+void MediaPlayerController::setVideoSink(QObject *sink)
+{
+    m_player->setVideoSink(qobject_cast<QVideoSink *>(sink));
+    emit hasVideoChanged();
+}

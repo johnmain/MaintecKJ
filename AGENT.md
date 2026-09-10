@@ -6,6 +6,10 @@
 - **Audio Engine:** Qt Multimedia / PipeWire / PulseAudio with SoundTouch/RubberBand DSP pipeline
 - **Video/Graphics:** Qt Quick Hardware-Accelerated Rendering (Vulkan/OpenGL)
 - **Database:** SQLite3 / Qt SQL Module
+* **Search Tools:** Use `rg` (ripgrep) and `fd` for searching files and code patterns. Do NOT use `find` or `grep`.
+  * Search code: `rg "Pattern"`
+  * Search filenames: `fd "FileName"`
+* **Build Artifact Exclusion:** Always exclude `build/` and `.cache/` directories when searching or listing files.
 
 ---
 
@@ -96,3 +100,26 @@ The main window uses nested `SplitView` components to allow full user control ov
 - **CDG Upscaling:** Option to apply bilinear/nearest-neighbor scaling filters to low-res CDG graphics.
 - **Secondary Background:** Custom image selector for display when no karaoke track is playing.
 - **Display Target Routing:** Monitor selection dropdown for Secondary Window output.
+
+---
+
+## 7. Code Editing Rules
+* **Single-File Changes:** Edit or create ONLY ONE file per turn using native file-writing tools.
+* **No Multi-File Bash Scripts:** NEVER execute monolithic `cat << 'EOF'` bash scripts to write multiple files simultaneously.
+* **Relative Imports:** Standardize QML component imports using relative directory imports (e.g., `import "components"`) to maintain QML engine resolution stability.
+
+---
+
+## 8. Build & Verification Standard
+* Mandatory Build Check: After every code change, immediately verify compilation by running:
+  cmake -B build -S . && cmake --build build
+* Verify Success: Check for [100%] Built target mainteckj-app before declaring a task complete.
+
+---
+
+## 9. Diagnostics & Failure Recovery
+* Targeted Fixes: If the build fails:
+  1. Inspect the exact compiler or QML engine error message.
+  2. Modify ONLY the file causing the build failure.
+  3. Do NOT rewrite unrelated QML components or reconfigure CMake URIs unless explicitly required.
+* Two-Failure Stop Policy: If a build fails twice consecutively on the same issue, STOP immediately. Report the exact compiler log and request human guidance instead of attempting further automated fixes.
