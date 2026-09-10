@@ -14,6 +14,8 @@
 #include "CdgRenderer.h"
 #include "MidiController.h"
 #include "OpenKjImporter.h"
+#include "BackgroundPlaylistModel.h"
+#include "ModeController.h"
 #include "SongListExporter.h"
 
 // Supplied by CMake (see target_compile_definitions in CMakeLists.txt). Kept
@@ -38,11 +40,15 @@ int main(int argc, char *argv[])
     SongQueueModel songQueueModel;
     FolderScanner folderScanner;
     SongDatabaseModel songDatabaseModel(&databaseManager);
+    // Same model class, pointed at the background collection instead.
+    SongDatabaseModel backgroundSongModel(&databaseManager, true);
+    BackgroundPlaylistModel backgroundPlaylistModel;
     MediaPlayerController mediaPlayer;
     RotationController rotation;
     MidiController midiController;
     OpenKjImporter openKjImporter;
     SongListExporter songListExporter;
+    ModeController modeController;
 
     rotation.setSingerModel(&singerModel);
     rotation.setQueueModel(&songQueueModel);
@@ -62,13 +68,19 @@ int main(int argc, char *argv[])
     // Plain Artist/Title list of the whole library, for the song-book workflow.
     songListExporter.setDatabaseManager(&databaseManager);
 
-    // A song ending on its own advances the rotation to the next singer.
+    // A song ending on its own is routed by the mode: karaoke advances the
+    // rotation (without auto-playing), background music plays the next entry.
+    modeController.setPlayer(&mediaPlayer);
+    modeController.setRotation(&rotation);
+    modeController.setBackgroundPlaylist(&backgroundPlaylistModel);
+
     QObject::connect(&mediaPlayer, &MediaPlayerController::songFinished,
-                     &rotation, &RotationController::advance);
+                     &modeController, &ModeController::onSongFinished);
 
     // Restore persisted singer rotation + song queue
     singerModel.setDatabaseManager(&databaseManager);
     songQueueModel.setDatabaseManager(&databaseManager);
+    backgroundPlaylistModel.setDatabaseManager(&databaseManager);
     
     QQmlApplicationEngine engine;
     
@@ -83,6 +95,9 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("databaseManager", &databaseManager);
     engine.rootContext()->setContextProperty("folderScanner", &folderScanner);
     engine.rootContext()->setContextProperty("songDatabaseModel", &songDatabaseModel);
+    engine.rootContext()->setContextProperty("backgroundSongModel", &backgroundSongModel);
+    engine.rootContext()->setContextProperty("backgroundPlaylistModel", &backgroundPlaylistModel);
+    engine.rootContext()->setContextProperty("modeController", &modeController);
     engine.rootContext()->setContextProperty("mediaPlayer", &mediaPlayer);
     engine.rootContext()->setContextProperty("rotationController", &rotation);
     engine.rootContext()->setContextProperty("midiController", &midiController);
@@ -92,6 +107,10 @@ int main(int argc, char *argv[])
     // Resolve the generated MaintecKJ QML module (it is emitted next to the
     // executable) and the QML sources without baking in absolute paths, so the
     // app runs from any checkout or install prefix.
+    // Pick up the mode the app was left in. Deliberately not setMode(): there is
+    // no deck to fade out at start-up.
+    modeController.restore();
+
     engine.addImportPath(QCoreApplication::applicationDirPath());
 
     QString qmlDir = QString::fromUtf8(MAINTECKJ_QML_DIR);

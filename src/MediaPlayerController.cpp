@@ -20,6 +20,10 @@ MediaPlayerController::MediaPlayerController(QObject *parent)
     m_player->setAudioOutput(m_audioOutput);
     m_audioOutput->setVolume(0.0);
 
+    // ~33 steps a second is smooth enough and keeps the timer cheap.
+    m_fadeTimer.setInterval(30);
+    connect(&m_fadeTimer, &QTimer::timeout, this, &MediaPlayerController::stepFade);
+
     connect(m_player, &QMediaPlayer::mediaStatusChanged, this,
             [this](QMediaPlayer::MediaStatus status) {
                 if (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia)
@@ -108,6 +112,70 @@ int MediaPlayerController::audioDeviceIndex() const
     return m_audio->audioDeviceIndex();
 }
 
+void MediaPlayerController::fadeOutAndStop(int milliseconds)
+{
+    if (milliseconds <= 0) {
+        cancelFade();
+        stop();
+        return;
+    }
+
+    // Asking again restarts the fade from wherever it has got to.
+    cancelFade();
+
+    m_volumeBeforeFade = m_audio->volume();
+    m_fadeTotalMs = milliseconds;
+    m_fadeElapsedMs = 0;
+    m_fading = true;
+    m_fadeTimer.start();
+}
+
+void MediaPlayerController::cancelFade()
+{
+    if (!m_fading)
+        return;
+
+    m_fadeTimer.stop();
+    m_fading = false;
+
+    // The dip was never reported as the volume, so restoring the engine's level
+    // says nothing to anyone - the UI still shows exactly this value.
+    m_fadeApplying = true;
+    m_audio->setVolume(m_volumeBeforeFade);
+    m_fadeApplying = false;
+}
+
+void MediaPlayerController::stepFade()
+{
+    if (!m_fading)
+        return;
+
+    m_fadeElapsedMs += m_fadeTimer.interval();
+    const qreal remaining = 1.0 - (static_cast<qreal>(m_fadeElapsedMs) / m_fadeTotalMs);
+    if (remaining <= 0.0) {
+        finishFade();
+        return;
+    }
+
+    // Straight to the engine: the ramp is an implementation detail, so it must
+    // not drag the volume slider - or the DJ fader mirroring it - down with it.
+    m_fadeApplying = true;
+    m_audio->setVolume(static_cast<int>(m_volumeBeforeFade * remaining));
+    m_fadeApplying = false;
+}
+
+void MediaPlayerController::finishFade()
+{
+    m_fadeTimer.stop();
+    m_fading = false;
+
+    m_fadeApplying = true;
+    m_audio->setVolume(m_volumeBeforeFade);
+    m_fadeApplying = false;
+
+    stop();
+}
+
 void MediaPlayerController::updateMetadata()
 {
     const QMediaMetaData meta = m_player->metaData();
@@ -144,6 +212,9 @@ void MediaPlayerController::load(const QString &filePath)
     if (filePath.isEmpty())
         return;
 
+    // A fade belongs to the outgoing song; it must not follow us into the next.
+    cancelFade();
+
     m_filePath = filePath;
     m_errorString.clear();
 
@@ -179,6 +250,8 @@ void MediaPlayerController::load(const QString &filePath)
 
 void MediaPlayerController::play()
 {
+    // Starting playback part way through a fade would come out silent.
+    cancelFade();
     m_audio->play();
     if (m_playerIsVideo)
         m_player->play();
@@ -224,6 +297,12 @@ void MediaPlayerController::seekFraction(qreal fraction)
 void MediaPlayerController::setVolume(int volume)
 {
     m_audio->setVolume(volume);
+
+    // If the operator moves the fader mid-fade, that becomes the level the fade
+    // returns to, so the fade cannot undo the change a moment later.
+    if (m_fading && !m_fadeApplying)
+        m_volumeBeforeFade = qBound(0, volume, 100);
+
     emit volumeChanged();
 }
 

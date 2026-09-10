@@ -59,39 +59,49 @@
 - [x] The key fader writes the value to the loaded song's queue rows so it lands in the singer's history, debounced 400 ms so a single sweep is one write rather than a hundred
 - [x] Deck panel shows the connected device, an enable/disable toggle and a rescan button; `MAINTECKJ_MIDI_LOG=1` dumps raw controller/note events
 
-## Phase 7: Background Music Mode (NOT STARTED - specification agreed)
+## Phase 7: Background Music Mode (COMPLETE)
 
 Goal: the app can double as a normal music player between singers, without the
 singer rotation machinery getting involved.
 
 ### Modes & library
-- [ ] Karaoke / Background Music selector at the top of the main window
-- [ ] **A separate table in the database** (`background_songs`, with its own directory rows) - not a filtered view of `songs`. The folders are entirely different folders, so nothing is inferred from extensions or from a `.cdg` sibling
-- [ ] **Add Folder** while the Background Music tab is selected indexes into that table only
-- [ ] Files use the same `{Artist} - {Title}` naming convention as the karaoke library, so the existing filename parser is reused instead of reading embedded tags
-- [ ] Formats: anything FFmpeg can decode. The scan should use a wide extension allow-list and let `ffprobe` reject what it cannot read, so the list is not hand-maintained and does not need updating when FFmpeg gains a format
+- [x] Karaoke / Background Music selector (`TabBar`) at the top of the main window; the choice is persisted in `QSettings` as `app/mode`
+- [x] **Separate tables** (`background_songs`, `background_directories`) with their own directory rows - not a filtered view of `songs`, because the folders are entirely different folders. That a background scan leaves the karaoke library untouched is asserted, not assumed
+- [x] **Add Folder** while the Background Music tab is selected indexes into those tables only
+- [x] Files use the same `{Artist} - {Title}` convention, so `FolderScanner::parseFileName` is reused rather than reading embedded tags
+- [x] Formats: `FolderScanner::audioExtensions()` is a wide list (mp3, flac, m4a, aac, mp4, ogg, opus, wav, wma, ape, wv and more) and `ffprobe` is the arbiter - a file it cannot decode is left out of the library entirely
+- [x] `SongDatabaseModel` gained a `background` flag rather than a second model being forked: `refreshData()` is its only load point, so the whole difference is which table the rows come from, plus an in-memory filter since the background collection has no SQL search
 
 ### Playlist
-- [ ] The background playlist is its **own model and table**, separate from the singer queue (`SongQueueModel`). Its rows carry no singer, so they must never reach the rotation, `hasUnplayedFor()`, `markPlayedByPath()` or the singer queue panel
-- [ ] **Add All to Queue** button - adds every song in the background library (the library is a few hundred tracks, so no filter scoping is wanted)
-- [ ] Double-clicking a background song adds it to the playlist
-- [ ] Dragging a background song onto the queue adds it
-- [ ] **Random** button reshuffles the playlist on every press (a one-shot shuffle, never a continuous/repeating one)
+- [x] `BackgroundPlaylistModel` over its own `background_playlist` table. Its rows carry no singer and the class shares no code with `SongQueueModel`, so background music cannot reach the rotation, `hasUnplayedFor()`, `markPlayedByPath()` or the singer queue panel
+- [x] **Add All to Playlist** adds every song in the background library; pressing it again only picks up what is new, because entries already listed are skipped
+- [x] Double-clicking a background song adds it to the playlist
+- [x] Dragging a background song down onto the playlist adds it (the delegate carries its own fields and the playlist's `DropArea` reads them off `drop.source`)
+- [x] **Random** reshuffles on every press - a single Fisher-Yates pass, never continuous, so the running order cannot change under the operator between songs. The loaded track is followed to its new row instead of being shuffled out from under the deck
 
 ### Playback
-- [ ] Double-clicking a playlist entry plays it and auto-advances to the next entry when the song finishes
-- [ ] Auto-advance belongs to Background Music mode only - the singer rotation keeps its "select the next singer, never auto-play" behaviour
+- [x] Double-clicking a playlist entry plays it, and the next entry plays automatically when a song ends
+- [x] Auto-advance belongs to Background Music mode only: `ModeController::onSongFinished()` routes to the playlist or to `RotationController::advance()`. At the end of the playlist it stops rather than looping
+- [x] Background tracks play as recorded - the per-song key shift is reset to 0 so a singer's key change cannot leak into the background music. Tempo is left to the operator
 
 ### Tab switching
-- [ ] Karaoke -> Background Music: the karaoke song keeps playing
-- [ ] Background Music -> Karaoke: the playing track **fades out over 5 s and stops**
-- [ ] The fade must not clobber the stored volume: ramp the sink and restore the previous level afterwards, so the user's volume setting - and the DJ controller's volume fader position - still mean what they did before the fade (volume is owned by `RubberBandAudioEngine` via `m_sink->setVolume()`)
+- [x] Karaoke -> Background Music: the karaoke song keeps playing
+- [x] Background Music -> Karaoke: the playing track **fades out over 5 s and stops**
+- [x] `MediaPlayerController::fadeOutAndStop(ms)` ramps the engine directly and never reports the dip, so the volume slider and the DJ controller's absolute volume fader do not chase it for five seconds. The stored volume is put back afterwards (verified: 70 before the fade, 70 after), and `cancelFade()` undoes it if playback resumes
 
 ### Persistence
-- [ ] The background playlist survives a restart, the way the singer queue does
+- [x] The background playlist survives a restart, the way the singer queue does
 
 ### Layout
-- [ ] The Singer Rotation panel stays on screen while the Background Music tab is selected
+- [x] The Singer Rotation panel stays on screen while the Background Music tab is selected
+- [x] `Main.qml` swaps only the two centre panels (library, and queue/playlist) through `Loader.source`
+
+### Known limitations
+- [ ] Indexing probes every new file with `ffprobe` on the UI thread, so a first scan of a few hundred tracks freezes the window for roughly ten to twenty seconds. A worker thread would fix it
+- [ ] Dragging out of the library is clipped at the `ListView` edge, so the dragged row vanishes from view once it leaves the list. The drop itself still lands
+
+### Verification
+- [x] `/tmp/bgm_test.cpp` - 31 assertions, all passing: junk extensions ignored, a corrupt `.mp3` rejected by ffprobe, karaoke tables untouched, re-index does not duplicate, Add All idempotent, shuffle follows the loaded song, the playlist survives a reload, karaoke never auto-plays, background auto-advance loads the next entry, end-of-list stops, the fade delays the stop and restores the volume, and the mode is persisted
 
 ## Phase 8: OpenKJ Singer Import (COMPLETE)
 

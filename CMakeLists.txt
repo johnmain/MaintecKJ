@@ -26,6 +26,10 @@ qt_add_executable(mainteckj-app
     src/OpenKjImporter.h
     src/SongListExporter.cpp
     src/SongListExporter.h
+    src/BackgroundPlaylistModel.cpp
+    src/BackgroundPlaylistModel.h
+    src/ModeController.cpp
+    src/ModeController.h
     src/DatabaseManager.cpp
     src/DatabaseManager.h
     src/FolderScanner.cpp

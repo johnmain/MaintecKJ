@@ -2,8 +2,9 @@
 #include <QDebug>
 #include <algorithm>
 
-SongDatabaseModel::SongDatabaseModel(DatabaseManager *databaseManager, QObject *parent)
-    : QAbstractTableModel(parent), m_databaseManager(databaseManager)
+SongDatabaseModel::SongDatabaseModel(DatabaseManager *databaseManager, bool background,
+                                     QObject *parent)
+    : QAbstractTableModel(parent), m_databaseManager(databaseManager), m_background(background)
 {
     if (m_databaseManager) {
         refreshData();
@@ -158,7 +159,29 @@ void SongDatabaseModel::refreshData()
 {
     beginResetModel();
 
-    if (m_filter.isEmpty()) {
+    if (m_background) {
+        // The background collection has no SQL search of its own, so the filter
+        // is applied in memory - a few hundred rows at most.
+        m_cachedData = m_databaseManager->getAllBackgroundSongs(m_includeDeleted);
+
+        if (!m_filter.isEmpty()) {
+            const QString needle = m_filter.toLower();
+            QVariantList filtered;
+            filtered.reserve(m_cachedData.size());
+            for (const QVariant &entry : std::as_const(m_cachedData)) {
+                const QVariantMap row = entry.toMap();
+                const QString haystack = (row.value(QStringLiteral("artist")).toString()
+                                          + QLatin1Char(' ')
+                                          + row.value(QStringLiteral("title")).toString()
+                                          + QLatin1Char(' ')
+                                          + row.value(QStringLiteral("source")).toString())
+                                             .toLower();
+                if (haystack.contains(needle))
+                    filtered.append(entry);
+            }
+            m_cachedData = filtered;
+        }
+    } else if (m_filter.isEmpty()) {
         m_cachedData = m_databaseManager->getAllSongs(m_includeDeleted);
     } else {
         m_cachedData = m_databaseManager->searchSongs(m_filter, m_includeDeleted);

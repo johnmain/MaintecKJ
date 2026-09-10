@@ -64,6 +64,56 @@ QVector<ParsedSong> FolderScanner::scanDirectory(const QString &directoryPath)
     return results;
 }
 
+QStringList FolderScanner::audioExtensions() const
+{
+    // Anything FFmpeg can decode is a candidate; what it cannot actually read is
+    // rejected later by ffprobe. Keeping the list wide is the point - it should
+    // not need revisiting every time FFmpeg learns a format.
+    return {
+        ".mp3", ".flac", ".m4a", ".m4b", ".m4p", ".aac", ".mp4", ".mka",
+        ".ogg", ".oga", ".opus", ".spx",
+        ".wav", ".w64", ".rf64", ".aiff", ".aif", ".aifc", ".caf", ".au", ".snd",
+        ".wma", ".asf", ".ape", ".wv", ".mpc", ".tta", ".alac",
+        ".amr", ".ac3", ".eac3", ".dts", ".dtshd", ".ra", ".gsm", ".voc"
+    };
+}
+
+bool FolderScanner::isBackgroundAudioFile(const QString &filePath)
+{
+    const QString extension = QLatin1Char('.') + QFileInfo(filePath).suffix().toLower();
+    return audioExtensions().contains(extension);
+}
+
+QVector<ParsedSong> FolderScanner::scanAudioDirectory(const QString &directoryPath)
+{
+    QVector<ParsedSong> results;
+
+    QDir dir(directoryPath);
+    if (!dir.exists()) {
+        qDebug() << "Directory does not exist:" << directoryPath;
+        return results;
+    }
+
+    QDirIterator iterator(directoryPath, QDir::Files, QDirIterator::Subdirectories);
+    while (iterator.hasNext()) {
+        const QString filePath = iterator.next();
+        if (!isBackgroundAudioFile(filePath))
+            continue;
+
+        ParsedSong parsed = parseFileName(QFileInfo(filePath).fileName());
+        parsed.filePath = filePath;
+        parsed.extension = QFileInfo(filePath).suffix().toLower();
+        // Background files never take part in karaoke pairing or video output.
+        parsed.isCdgPair = false;
+        parsed.isVideoFile = false;
+        parsed.isZipArchive = false;
+
+        results.append(parsed);
+    }
+
+    return results;
+}
+
 ParsedSong FolderScanner::parseFileName(const QString &fileName)
 {
     ParsedSong parsed;

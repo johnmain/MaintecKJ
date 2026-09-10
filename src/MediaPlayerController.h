@@ -65,6 +65,12 @@ public slots:
     Q_INVOKABLE void seek(int positionMs);
     Q_INVOKABLE void seekFraction(qreal fraction);
 
+    // Fades the sink to silence over `milliseconds` and then stops. The stored
+    // volume is put back afterwards, so the operator's setting - and the DJ
+    // volume fader that mirrors it - still means what it did before the fade.
+    Q_INVOKABLE void fadeOutAndStop(int milliseconds = 5000);
+    Q_INVOKABLE void cancelFade();
+
     Q_INVOKABLE QStringList audioDevices() const;
     Q_INVOKABLE void setAudioDevice(int index);
 
@@ -89,6 +95,8 @@ signals:
 private:
     void updateMetadata();
     void syncVideoPosition();
+    void stepFade();
+    void finishFade();
 
     QMediaPlayer *m_player = nullptr;         // video + metadata only (audio muted)
     QAudioOutput *m_audioOutput = nullptr;    // muted clock for the video player
@@ -100,6 +108,13 @@ private:
     QString m_errorString;
     bool m_playerIsVideo = false;
     QTimer m_tempoTimer;
+
+    QTimer m_fadeTimer;
+    int m_fadeTotalMs = 0;
+    int m_fadeElapsedMs = 0;
+    int m_volumeBeforeFade = 80;
+    bool m_fading = false;
+    bool m_fadeApplying = false;
 };
 
 #endif // MEDIAPLAYERCONTROLLER_H

@@ -39,6 +39,12 @@ public:
     ParsedSong parseFileName(const QString &fileName);
     bool isFileInSupportedPattern(const QString &fileName);
 
+    // Background music (Phase 7). Same {Artist} - {Title} parsing, but a wide
+    // audio-only extension list and none of the karaoke handling: no .cdg
+    // pairing and no video.
+    QVector<ParsedSong> scanAudioDirectory(const QString &directoryPath);
+    QStringList audioExtensions() const;
+
     // Pattern matching
     bool matchesPattern(const QString &fileName, const QRegularExpression &pattern);
     QString extractArtistFromPattern(const QString &fileName, const QRegularExpression &pattern);
@@ -49,6 +55,7 @@ public:
     bool isVideoFile(const QString &filePath);
     bool isZipArchive(const QString &filePath);
     bool isAudioFile(const QString &filePath);
+    bool isBackgroundAudioFile(const QString &filePath);
 
     // Directory operations
     QStringList getAllFiles(const QString &directoryPath, bool recursive = true);

@@ -33,11 +33,13 @@ int probeDurationSeconds(const QString &filePath)
 
 // Lengths already stored for a directory, keyed by file path. Rows written by
 // older versions hold 0, which counts as unknown so they get measured once.
-QHash<QString, int> knownDurationsFor(QSqlDatabase &db, int directoryId)
+QHash<QString, int> knownDurationsFor(QSqlDatabase &db, int directoryId,
+                                      const QString &songTable = QStringLiteral("songs"))
 {
     QHash<QString, int> durations;
     QSqlQuery query(db);
-    query.prepare(QStringLiteral("SELECT file_path, duration FROM songs WHERE directory_id = ?"));
+    query.prepare(QStringLiteral("SELECT file_path, duration FROM %1 WHERE directory_id = ?")
+                      .arg(songTable));
     query.addBindValue(directoryId);
     if (query.exec()) {
         while (query.next()) {
@@ -61,21 +63,24 @@ int durationSecondsFor(const QHash<QString, int> &known, const QString &filePath
     return probed > 0 ? probed : 0;
 }
 
-int countSongs(QSqlDatabase &db)
+int countSongs(QSqlDatabase &db, const QString &songTable = QStringLiteral("songs"))
 {
     QSqlQuery query(db);
-    if (query.exec(QStringLiteral("SELECT COUNT(*) FROM songs WHERE is_deleted = 0")) && query.next())
+    if (query.exec(QStringLiteral("SELECT COUNT(*) FROM %1 WHERE is_deleted = 0").arg(songTable))
+        && query.next())
         return query.value(0).toInt();
     return 0;
 }
 
 bool insertSongRow(QSqlDatabase &db, const QString &artist, const QString &title,
-                   const QString &filePath, int duration, int directoryId, const QString &source = QString())
+                   const QString &filePath, int duration, int directoryId,
+                   const QString &source = QString(),
+                   const QString &songTable = QStringLiteral("songs"))
 {
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "INSERT OR IGNORE INTO songs (artist, title, file_path, duration, directory_id, source) "
-        "VALUES (?, ?, ?, ?, ?, ?)"));
+        "INSERT OR IGNORE INTO %1 (artist, title, file_path, duration, directory_id, source) "
+        "VALUES (?, ?, ?, ?, ?, ?)").arg(songTable));
     query.addBindValue(artist);
     query.addBindValue(title);
     query.addBindValue(filePath);
@@ -89,10 +94,11 @@ bool insertSongRow(QSqlDatabase &db, const QString &artist, const QString &title
     return query.exec();
 }
 
-int directoryIdForPath(QSqlDatabase &db, const QString &absPath)
+int directoryIdForPath(QSqlDatabase &db, const QString &absPath,
+                       const QString &directoryTable = QStringLiteral("directories"))
 {
     QSqlQuery query(db);
-    query.prepare(QStringLiteral("SELECT id FROM directories WHERE path = ?"));
+    query.prepare(QStringLiteral("SELECT id FROM %1 WHERE path = ?").arg(directoryTable));
     query.addBindValue(absPath);
     if (query.exec() && query.next())
         return query.value(0).toInt();
@@ -183,6 +189,45 @@ bool DatabaseManager::initializeDatabase()
         return false;
     }
 
+    // Background music (Phase 7) lives in its own tables rather than behind a
+    // flag on `songs`, because the two libraries are entirely different folders.
+    if (!query.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS background_songs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "artist TEXT, "
+            "title TEXT, "
+            "file_path TEXT UNIQUE, "
+            "duration INTEGER, "
+            "directory_id INTEGER, "
+            "is_deleted INTEGER DEFAULT 0, "
+            "source TEXT)"))) {
+        qDebug() << "Error creating background_songs table:" << query.lastError().text();
+        return false;
+    }
+
+    if (!query.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS background_directories ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "path TEXT UNIQUE)"))) {
+        qDebug() << "Error creating background_directories table:" << query.lastError().text();
+        return false;
+    }
+
+    // The background playlist belongs to the app, not to a singer, so it has no
+    // singer column and never reaches the rotation.
+    if (!query.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS background_playlist ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "title TEXT, "
+            "artist TEXT, "
+            "file_path TEXT, "
+            "duration INTEGER, "
+            "source TEXT, "
+            "position INTEGER)"))) {
+        qDebug() << "Error creating background_playlist table:" << query.lastError().text();
+        return false;
+    }
+
     // Migrate: associate each song with the root directory it came from.
     bool hasDirectoryId = false;
     if (query.exec(QStringLiteral("PRAGMA table_info(songs)"))) {
@@ -261,11 +306,14 @@ bool DatabaseManager::initializeDatabase()
     ensureIndexes();
 
     m_songCount = countSongs(m_db);
+    m_backgroundSongCount = countSongs(m_db, QStringLiteral("background_songs"));
 
     emit dataLocationChanged();
     emit songCountChanged();
+    emit backgroundSongCountChanged();
 
-    qDebug() << "Database initialized at:" << m_dataLocation << "songs:" << m_songCount;
+    qDebug() << "Database initialized at:" << m_dataLocation << "songs:" << m_songCount
+             << "background songs:" << m_backgroundSongCount;
     return true;
 }
 
@@ -593,6 +641,214 @@ void DatabaseManager::rescanDirectory(const QString &directoryPath)
     emit songCountChanged();
 
     qDebug() << "Rescanned directory:" << absPath << "songs:" << addedCount;
+}
+
+// --- Background music (Phase 7) --------------------------------------------
+// Mirrors the karaoke scan, but against its own tables, with the audio-only
+// extension list and no .cdg pairing: ffprobe decides whether a file is really
+// readable, and anything it rejects is left out of the library entirely.
+
+bool DatabaseManager::addBackgroundDirectory(const QString &directoryPath)
+{
+    QDir dir(directoryPath);
+    if (!dir.exists())
+        return false;
+
+    const QString absPath = QDir::cleanPath(dir.absolutePath());
+
+    QSqlQuery insertDir(m_db);
+    insertDir.prepare(QStringLiteral("INSERT OR IGNORE INTO background_directories (path) VALUES (?)"));
+    insertDir.addBindValue(absPath);
+    if (!insertDir.exec()) {
+        qDebug() << "Error adding background directory:" << insertDir.lastError().text();
+        return false;
+    }
+
+    const int dirId = directoryIdForPath(m_db, absPath, QStringLiteral("background_directories"));
+    if (dirId < 0) {
+        qDebug() << "Could not resolve background directory id for:" << absPath;
+        return false;
+    }
+
+    const QHash<QString, int> knownDurations =
+        knownDurationsFor(m_db, dirId, QStringLiteral("background_songs"));
+
+    FolderScanner scanner;
+    const QVector<ParsedSong> found = scanner.scanAudioDirectory(absPath);
+
+    int addedCount = 0;
+    int unreadable = 0;
+    for (const ParsedSong &parsed : found) {
+        const int seconds = durationSecondsFor(knownDurations, parsed.filePath);
+        if (seconds <= 0) {
+            // The wide extension list decided what to look at; ffprobe decides
+            // what is actually playable.
+            ++unreadable;
+            continue;
+        }
+
+        if (insertSongRow(m_db, parsed.artist, parsed.title, parsed.filePath, seconds,
+                          dirId, parsed.source, QStringLiteral("background_songs")))
+            ++addedCount;
+    }
+
+    m_backgroundSongCount = countSongs(m_db, QStringLiteral("background_songs"));
+    emit backgroundSongCountChanged();
+
+    qDebug() << "Added background directory:" << absPath << "new songs:" << addedCount
+             << "unreadable:" << unreadable;
+    return addedCount > 0;
+}
+
+bool DatabaseManager::removeBackgroundDirectory(const QString &directoryPath)
+{
+    const QString absPath = QDir::cleanPath(QDir(directoryPath).absolutePath());
+    const int dirId = directoryIdForPath(m_db, absPath, QStringLiteral("background_directories"));
+    if (dirId < 0)
+        return false;
+
+    QSqlQuery deleteSongs(m_db);
+    deleteSongs.prepare(QStringLiteral("DELETE FROM background_songs WHERE directory_id = ?"));
+    deleteSongs.addBindValue(dirId);
+    if (!deleteSongs.exec()) {
+        qDebug() << "Error removing songs of background directory:" << deleteSongs.lastError().text();
+        return false;
+    }
+
+    QSqlQuery deleteDir(m_db);
+    deleteDir.prepare(QStringLiteral("DELETE FROM background_directories WHERE id = ?"));
+    deleteDir.addBindValue(dirId);
+    if (!deleteDir.exec()) {
+        qDebug() << "Error removing background directory:" << deleteDir.lastError().text();
+        return false;
+    }
+
+    m_backgroundSongCount = countSongs(m_db, QStringLiteral("background_songs"));
+    emit backgroundSongCountChanged();
+
+    qDebug() << "Removed background directory:" << absPath;
+    return true;
+}
+
+void DatabaseManager::rescanBackgroundDirectory(const QString &directoryPath)
+{
+    const QString absPath = QDir::cleanPath(QDir(directoryPath).absolutePath());
+    const int dirId = directoryIdForPath(m_db, absPath, QStringLiteral("background_directories"));
+    if (dirId < 0) {
+        addBackgroundDirectory(absPath);
+        return;
+    }
+
+    const QHash<QString, int> knownDurations =
+        knownDurationsFor(m_db, dirId, QStringLiteral("background_songs"));
+
+    FolderScanner scanner;
+    const QVector<ParsedSong> found = scanner.scanAudioDirectory(absPath);
+
+    int addedCount = 0;
+    for (const ParsedSong &parsed : found) {
+        const int seconds = durationSecondsFor(knownDurations, parsed.filePath);
+        if (seconds <= 0)
+            continue;
+
+        if (insertSongRow(m_db, parsed.artist, parsed.title, parsed.filePath, seconds,
+                          dirId, parsed.source, QStringLiteral("background_songs")))
+            ++addedCount;
+    }
+
+    m_backgroundSongCount = countSongs(m_db, QStringLiteral("background_songs"));
+    emit backgroundSongCountChanged();
+
+    qDebug() << "Rescanned background directory:" << absPath << "new songs:" << addedCount;
+}
+
+QVariantList DatabaseManager::getAllBackgroundSongs(bool includeDeleted)
+{
+    QVariantList results;
+
+    QSqlQuery query(m_db);
+    QString sql = QStringLiteral(
+        "SELECT id, artist, title, file_path, duration, is_deleted, source "
+        "FROM background_songs");
+    if (!includeDeleted)
+        sql += QStringLiteral(" WHERE is_deleted = 0");
+    sql += QStringLiteral(" ORDER BY artist, title");
+
+    if (!query.exec(sql))
+        return results;
+
+    while (query.next()) {
+        QVariantMap song;
+        song[QStringLiteral("id")] = query.value(0).toInt();
+        song[QStringLiteral("artist")] = query.value(1).toString();
+        song[QStringLiteral("title")] = query.value(2).toString();
+        song[QStringLiteral("filePath")] = query.value(3).toString();
+        song[QStringLiteral("duration")] = query.value(4).toInt();
+        song[QStringLiteral("isDeleted")] = query.value(5).toInt() != 0;
+        song[QStringLiteral("source")] = query.value(6).toString();
+        results.append(song);
+    }
+
+    return results;
+}
+
+bool DatabaseManager::backgroundSongExists(const QString &filePath)
+{
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT 1 FROM background_songs WHERE file_path = ? LIMIT 1"));
+    query.addBindValue(filePath);
+    return query.exec() && query.next();
+}
+
+QVariantList DatabaseManager::loadBackgroundPlaylist()
+{
+    QVariantList items;
+
+    QSqlQuery query(m_db);
+    if (!query.exec(QStringLiteral(
+            "SELECT title, artist, file_path, duration, source FROM background_playlist "
+            "ORDER BY position"))) {
+        return items;
+    }
+
+    while (query.next()) {
+        QVariantMap item;
+        item[QStringLiteral("title")] = query.value(0).toString();
+        item[QStringLiteral("artist")] = query.value(1).toString();
+        item[QStringLiteral("filePath")] = query.value(2).toString();
+        item[QStringLiteral("duration")] = query.value(3).toInt();
+        item[QStringLiteral("source")] = query.value(4).toString();
+        items.append(item);
+    }
+
+    return items;
+}
+
+void DatabaseManager::saveBackgroundPlaylist(const QVariantList &items)
+{
+    m_db.transaction();
+
+    QSqlQuery clear(m_db);
+    clear.exec(QStringLiteral("DELETE FROM background_playlist"));
+
+    int position = 0;
+    for (const QVariant &entry : items) {
+        const QVariantMap item = entry.toMap();
+
+        QSqlQuery insert(m_db);
+        insert.prepare(QStringLiteral(
+            "INSERT INTO background_playlist (title, artist, file_path, duration, source, position) "
+            "VALUES (?, ?, ?, ?, ?, ?)"));
+        insert.addBindValue(item.value(QStringLiteral("title")).toString());
+        insert.addBindValue(item.value(QStringLiteral("artist")).toString());
+        insert.addBindValue(item.value(QStringLiteral("filePath")).toString());
+        insert.addBindValue(item.value(QStringLiteral("duration")).toInt());
+        insert.addBindValue(item.value(QStringLiteral("source")).toString());
+        insert.addBindValue(position++);
+        insert.exec();
+    }
+
+    m_db.commit();
 }
 
 bool DatabaseManager::addFileToDatabase(const QString &filePath)

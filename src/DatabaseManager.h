@@ -24,6 +24,7 @@ class DatabaseManager : public QObject
     Q_OBJECT
     Q_PROPERTY(QString dataLocation READ dataLocation NOTIFY dataLocationChanged)
     Q_PROPERTY(int songCount READ songCount NOTIFY songCountChanged)
+    Q_PROPERTY(int backgroundSongCount READ backgroundSongCount NOTIFY backgroundSongCountChanged)
 
 public:
     explicit DatabaseManager(QObject *parent = nullptr);
@@ -32,6 +33,7 @@ public:
     // Getters
     QString dataLocation() const { return m_dataLocation; }
     int songCount() const { return m_songCount; }
+    int backgroundSongCount() const { return m_backgroundSongCount; }
 
     // Database operations
     bool initializeDatabase();
@@ -55,6 +57,15 @@ public:
     Q_INVOKABLE bool removeDirectory(const QString &directoryPath);
     Q_INVOKABLE void rescanDirectory(const QString &directoryPath);
 
+    // Background music (Phase 7). Deliberately separate tables, not a flag on
+    // `songs`: the folders are different folders, so the karaoke library and the
+    // background library can never bleed into one another.
+    Q_INVOKABLE bool addBackgroundDirectory(const QString &directoryPath);
+    Q_INVOKABLE bool removeBackgroundDirectory(const QString &directoryPath);
+    Q_INVOKABLE void rescanBackgroundDirectory(const QString &directoryPath);
+    QVariantList getAllBackgroundSongs(bool includeDeleted = false);
+    bool backgroundSongExists(const QString &filePath);
+
     // Utility functions
     QString parseSongTitle(const QString &fileName);
     QString parseArtistFromTitle(const QString &title);
@@ -66,10 +77,16 @@ public:
     void saveSingers(const QVariantList &singers);
     void saveQueue(const QVariantList &items);
 
+    // The background playlist belongs to the app rather than to a singer, so it
+    // carries no singer column and never reaches the rotation.
+    QVariantList loadBackgroundPlaylist();
+    void saveBackgroundPlaylist(const QVariantList &items);
+
 private:
     QSqlDatabase m_db;
     QString m_dataLocation;
     int m_songCount;
+    int m_backgroundSongCount = 0;
 
     void ensureIndexes();
     QVariantList executeQuery(const QString &query);
@@ -80,6 +97,7 @@ private:
     signals:
         void dataLocationChanged();
         void songCountChanged();
+        void backgroundSongCountChanged();
 };
 
 #endif // DATABASEMANAGER_H

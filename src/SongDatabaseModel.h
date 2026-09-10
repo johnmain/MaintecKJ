@@ -14,6 +14,7 @@ class SongDatabaseModel : public QAbstractTableModel
     Q_PROPERTY(int sortColumn READ sortColumn NOTIFY sortChanged)
     Q_PROPERTY(bool sortAscending READ sortAscending NOTIFY sortChanged)
     Q_PROPERTY(bool includeDeleted READ includeDeleted NOTIFY includeDeletedChanged)
+    Q_PROPERTY(bool background READ background CONSTANT)
 
 public:
     enum Role {
@@ -26,7 +27,11 @@ public:
         SourceRole
     };
 
-    explicit SongDatabaseModel(DatabaseManager *databaseManager, QObject *parent = nullptr);
+    // With `background` set, the model lists the background music collection
+    // instead of the karaoke library. Deletion and editing stay karaoke-only,
+    // since the background panel does not offer them.
+    explicit SongDatabaseModel(DatabaseManager *databaseManager, bool background = false,
+                               QObject *parent = nullptr);
     ~SongDatabaseModel();
 
     // QAbstractTableModel overrides
@@ -56,6 +61,7 @@ public:
     int sortColumn() const { return m_sortColumn; }
     bool sortAscending() const { return m_sortAscending; }
     bool includeDeleted() const { return m_includeDeleted; }
+    bool background() const { return m_background; }
 
 signals:
     void sortChanged();
@@ -69,6 +75,7 @@ private:
     int m_sortColumn = 1;      // 1 = artist, 2 = title
     bool m_sortAscending = true;
     bool m_includeDeleted = false;
+    bool m_background = false;
 
     void resetQuery();
     void applySort();
