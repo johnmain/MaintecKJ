@@ -60,6 +60,12 @@ public:
     Q_INVOKABLE QString filePathAt(int index) const;
     Q_INVOKABLE void clearQueue();
 
+    // Bulk insert. While active, adding songs skips the full-queue rewrite that
+    // persist() normally does on every change, so importing a few hundred songs
+    // costs one database write instead of one per song.
+    Q_INVOKABLE void beginBulkInsert();
+    Q_INVOKABLE void endBulkInsert();
+
     // Rotation helpers. The model only ever exposes the songs belonging to
     // selectedSingerName (or every song when it is empty).
     Q_INVOKABLE bool hasUnplayedFor(const QString &singer) const;
@@ -93,6 +99,8 @@ private:
 
     void persist();
     void applySort();
+    bool m_bulkInsert = false;
+    bool m_persistPending = false;
     DatabaseManager *m_databaseManager = nullptr;
 };
 

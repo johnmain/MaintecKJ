@@ -13,6 +13,8 @@
 #include "RotationController.h"
 #include "CdgRenderer.h"
 #include "MidiController.h"
+#include "OpenKjImporter.h"
+#include "SongListExporter.h"
 
 // Supplied by CMake (see target_compile_definitions in CMakeLists.txt). Kept
 // optional so the file still compiles if the definition is ever removed.
@@ -39,6 +41,8 @@ int main(int argc, char *argv[])
     MediaPlayerController mediaPlayer;
     RotationController rotation;
     MidiController midiController;
+    OpenKjImporter openKjImporter;
+    SongListExporter songListExporter;
 
     rotation.setSingerModel(&singerModel);
     rotation.setQueueModel(&songQueueModel);
@@ -49,6 +53,14 @@ int main(int argc, char *argv[])
     // button toggles playback.
     midiController.setPlayer(&mediaPlayer);
     midiController.setQueueModel(&songQueueModel);
+
+    // Import regular singers and their song history from an OpenKJ export.
+    openKjImporter.setDatabaseManager(&databaseManager);
+    openKjImporter.setSingerModel(&singerModel);
+    openKjImporter.setSongQueueModel(&songQueueModel);
+
+    // Plain Artist/Title list of the whole library, for the song-book workflow.
+    songListExporter.setDatabaseManager(&databaseManager);
 
     // A song ending on its own advances the rotation to the next singer.
     QObject::connect(&mediaPlayer, &MediaPlayerController::songFinished,
@@ -74,6 +86,8 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("mediaPlayer", &mediaPlayer);
     engine.rootContext()->setContextProperty("rotationController", &rotation);
     engine.rootContext()->setContextProperty("midiController", &midiController);
+    engine.rootContext()->setContextProperty("openKjImporter", &openKjImporter);
+    engine.rootContext()->setContextProperty("songListExporter", &songListExporter);
     
     // Resolve the generated MaintecKJ QML module (it is emitted next to the
     // executable) and the QML sources without baking in absolute paths, so the

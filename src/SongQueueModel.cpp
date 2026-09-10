@@ -115,10 +115,35 @@ void SongQueueModel::setDatabaseManager(DatabaseManager *databaseManager)
     endResetModel();
 }
 
+void SongQueueModel::beginBulkInsert()
+{
+    m_bulkInsert = true;
+    m_persistPending = false;
+}
+
+void SongQueueModel::endBulkInsert()
+{
+    if (!m_bulkInsert)
+        return;
+
+    m_bulkInsert = false;
+    if (m_persistPending) {
+        m_persistPending = false;
+        persist();
+    }
+}
+
 void SongQueueModel::persist()
 {
     if (!m_databaseManager)
         return;
+
+    // Deferred while a bulk insert is running, so adding many songs is a single
+    // database write instead of one write per song.
+    if (m_bulkInsert) {
+        m_persistPending = true;
+        return;
+    }
 
     QVariantList list;
     for (const SongItem &song : m_songs) {

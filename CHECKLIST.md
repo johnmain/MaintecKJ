@@ -92,3 +92,75 @@ singer rotation machinery getting involved.
 
 ### Layout
 - [ ] The Singer Rotation panel stays on screen while the Background Music tab is selected
+
+## Phase 8: OpenKJ Singer Import (COMPLETE)
+
+Goal: bring regular singers and their song history over from OpenKJ in one step
+instead of retyping them.
+
+- [x] Import button in the singer panel, reading a JSON file from OpenKJ's "Export regulars" dialog (legacy XML accepted too)
+- [x] Each singer becomes a row in `singers` (Active), and each of their songs a row in `queue` for that singer
+- [x] `keychange` maps to `key_shift`
+- [x] Imported songs are marked **played**, otherwise the rotation treats a singer's entire history as a pending queue
+- [x] `SongQueueModel::beginBulkInsert()`/`endBulkInsert()` added: `persist()` rewrites the whole queue, so adding songs one at a time was quadratic - 200 singers and 4000 songs now import in **732 ms**
+- [x] Verified by `/tmp/okj_test.cpp`: 27 assertions covering JSON, XML, re-import, key clamping, bulk scale and a missing file, all passing
+
+### Format (JSON - top level is a bare array, no wrapper and no version field)
+
+```json
+[
+  {
+    "name": "Singer Name",
+    "songs": [
+      {
+        "filepath": "/media/karaoke/SC1234/Artist - Title.mp3",
+        "artist": "Artist",
+        "title": "Title",
+        "songid": "SC1234-05",
+        "keychange": 2,
+        "plays": 7,
+        "lastplay": "Mon Jan 15 11:50:00 2024"
+      }
+    ]
+  }
+]
+```
+
+- Taken from OpenKJ `src/dlgregularexport.cpp`; its importer reads back exactly these keys, and also accepts the older `<singer name="..."><song discid="" artist="" title="" key=""/></singer>` XML
+- `lastplay` is `QDateTime::toString()` with default arguments (`Qt::TextDate`): `ddd MMM d HH:mm:ss yyyy`, English C-locale, day **not** zero-padded, and an **empty string** when never played (verified by running it)
+- `songid` is OpenKJ's internal disc id (e.g. `SC1234-05`) and means nothing outside OpenKJ
+- `keychange` is in semitones and can exceed our ±6 clamp
+
+### Decisions
+- [x] **Path mapping**: artist and title are matched against our own `songs` table first (case-insensitive) and OpenKJ's `filepath` is kept only as the fallback, so the queue points at files we can actually play. Songs that match nothing are still imported, with their path left empty when OpenKJ had none, and are counted in the summary
+- [x] **Duplicates**: a singer already on the roster is skipped entirely, history included
+- [x] **`keychange` outside ±6**: clamped with `qBound`, not dropped
+- [x] `plays`/`lastplay` are discarded - there are no columns for them
+
+## Phase 9: Song List Export (COMPLETE)
+
+Goal: produce the flat Artist/Title list the song-book workflow consumes, without
+running a separate script over an OpenKJ filename dump.
+
+- [x] `SongListExporter`, and an "Export Song List..." button in the library panel
+- [x] Writes the whole library, leaving soft-deleted songs out
+- [x] Distinct on Artist + Title, compared case-insensitively
+- [x] The karaoke provider is absent from the output. It does not have to be
+      regexed off: the scanner already peels a trailing `[...]` tag into the
+      `source` column, and `source` never reaches the export. A stored title that
+      still carries a tag would need the old `\s*\[.*?\]` rule added
+- [x] Sorted by Artist then Title, both case-insensitive
+- [x] Byte-identical to Python's `json.dump(..., indent=2, ensure_ascii=False)`:
+      two-space indent, `Artist` before `Title`, non-ASCII kept as UTF-8
+- [x] An empty library writes `[]`
+- [x] Verified by `/tmp/export_test.cpp` (13 assertions) and by diffing against
+      Python's output for the same six songs - the files match exactly
+
+```json
+[
+  {
+    "Artist": "+44",
+    "Title": "When Your Heart Stops Beating"
+  }
+]
+```

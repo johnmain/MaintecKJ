@@ -13,6 +13,11 @@ Pane {
     readonly property color stripeColor: Qt.rgba(palette.windowText.r, palette.windowText.g, palette.windowText.b, 0.05)
     readonly property color stripeHoverColor: Qt.rgba(palette.windowText.r, palette.windowText.g, palette.windowText.b, 0.12)
 
+    // A null QString arrives in QML as undefined, so normalise before asking
+    // either of these for a length.
+    readonly property string exportError: songListExporter.lastError ? songListExporter.lastError : ""
+    readonly property string exportSummary: songListExporter.lastSummary ? songListExporter.lastSummary : ""
+
     function formatDuration(seconds) {
         var value = Number(seconds)
         if (!value || value <= 0)
@@ -119,6 +124,15 @@ Pane {
         }
     }
 
+    FileDialog {
+        id: songListExportDialog
+        title: "Export Song List"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "json"
+        nameFilters: ["JSON files (*.json)", "All files (*)"]
+        onAccepted: songListExporter.exportToFile(selectedFile)
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 8
@@ -171,6 +185,29 @@ Pane {
                     databaseManager.removeDirectory(folderField.text)
                     songDatabaseModel.refreshData()
                 }
+            }
+        }
+
+        // Library-wide actions
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            // Plain Artist/Title pairs, deduplicated, for the song-book workflow.
+            Button {
+                text: "Export Song List…"
+                onClicked: songListExportDialog.open()
+            }
+
+            Label {
+                text: databasePanel.exportError.length > 0
+                      ? databasePanel.exportError
+                      : databasePanel.exportSummary
+                visible: text.length > 0
+                color: databasePanel.exportError.length > 0 ? "#CC0000" : "#00AA00"
+                font.pixelSize: 10
+                elide: Text.ElideRight
+                Layout.fillWidth: true
             }
         }
 
