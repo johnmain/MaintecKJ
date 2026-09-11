@@ -1,6 +1,7 @@
 #include "OpenKjImporter.h"
 
 #include "DatabaseManager.h"
+#include "FolderScanner.h"
 #include "SingerModel.h"
 #include "SongQueueModel.h"
 
@@ -221,14 +222,40 @@ bool OpenKjImporter::importFromFile(const QString &filePath)
         for (const ImportedSong &song : std::as_const(singer.songs)) {
             QString path;
             QString source;
+            QString artist = song.artist;
+            QString title = song.title;
             int duration = 0;
 
             if (!resolveInLibrary(song.artist, song.title, path, duration, source)) {
                 path = song.filePath;
                 ++songsNotInLibrary;
+
+                // Not in our library, so the row keeps OpenKJ's own path and
+                // fields. OpenKJ stores the title exactly as it found it, which
+                // leaves the provider tag on the end of it - our own scan strips
+                // that into the Source column, so an imported row should not look
+                // different from a scanned one.
+                FolderScanner scanner;
+                const ParsedSong parsed =
+                    scanner.parseFileName(QFileInfo(song.filePath).fileName());
+
+                if (!parsed.title.isEmpty()
+                    && parsed.title != QStringLiteral("Unknown Title")) {
+                    if (source.isEmpty())
+                        source = parsed.source;
+
+                    // Only prefer the filename's title when OpenKJ's begins with
+                    // it, in which case the difference is just the trailing tag.
+                    // A title OpenKJ curated stays as it is.
+                    if (title.isEmpty() || title.startsWith(parsed.title))
+                        title = parsed.title;
+
+                    if (artist.isEmpty())
+                        artist = parsed.artist;
+                }
             }
 
-            m_songQueueModel->addSong(singer.name, song.title, song.artist, path, duration, source);
+            m_songQueueModel->addSong(singer.name, title, artist, path, duration, source);
 
             const int row = m_songQueueModel->rowCount() - 1;
             if (row < 0)
