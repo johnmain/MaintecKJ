@@ -220,11 +220,24 @@ void MediaPlayerController::load(const QString &filePath)
     // A fade belongs to the outgoing song; it must not follow us into the next.
     cancelFade();
 
-    m_filePath = filePath;
+    // A karaoke pair can arrive as its .cdg half - an OpenKJ export lists them,
+    // and a library scan stores one when the .mp3 was missing at the time. That
+    // file holds graphics and no audio whatsoever, so playing it produces "the
+    // media contains no audio stream". Play the .mp3 beside it instead; the CDG
+    // renderer is handed the graphics separately, through companionCdg().
+    QString playable = filePath;
+    if (QFileInfo(filePath).suffix().compare(QLatin1String("cdg"), Qt::CaseInsensitive) == 0) {
+        const QFileInfo cdgInfo(filePath);
+        const QString companion = cdgInfo.absolutePath() + QLatin1Char('/')
+                                  + cdgInfo.completeBaseName() + QStringLiteral(".mp3");
+        playable = QFile::exists(companion) ? companion : QString();
+    }
+
+    m_filePath = playable.isEmpty() ? filePath : playable;
     m_errorString.clear();
 
     // Fall back to the filename until real tags are resolved.
-    const QFileInfo info(filePath);
+    const QFileInfo info(m_filePath);
     m_title = info.completeBaseName();
     m_artist.clear();
 
@@ -232,12 +245,14 @@ void MediaPlayerController::load(const QString &filePath)
     // import done before the local library was indexed keeps the old computer's
     // path. Say so and stay stopped. Without this the deck reports the song as
     // loaded and playing while nothing comes out, which is baffling.
-    if (!QFile::exists(filePath)) {
+    if (playable.isEmpty() || !QFile::exists(playable)) {
         // Clear the engine rather than just stopping it: otherwise the previous
         // song stays primed and the Play button would start that instead.
         m_audio->setSource(QString());
         m_playerIsVideo = false;
-        m_errorString = tr("File not found: %1").arg(filePath);
+        m_errorString = playable.isEmpty()
+                            ? tr("No .mp3 beside %1").arg(QFileInfo(filePath).fileName())
+                            : tr("File not found: %1").arg(playable);
 
         emit sourceChanged();
         emit metadataChanged();
@@ -247,7 +262,7 @@ void MediaPlayerController::load(const QString &filePath)
         return;
     }
 
-    m_player->setSource(QUrl::fromLocalFile(filePath));
+    m_player->setSource(QUrl::fromLocalFile(playable));
     static const QStringList videoSuffixes = {
         QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("avi"),
         QStringLiteral("mov"), QStringLiteral("webm"), QStringLiteral("mpg"),
@@ -261,7 +276,7 @@ void MediaPlayerController::load(const QString &filePath)
     m_player->setAudioOutput(m_playerIsVideo ? m_audioOutput : nullptr);
     m_audioOutput->setVolume(0.0);
     m_player->setPlaybackRate(m_audio->tempo());
-    m_audio->setSource(filePath);
+    m_audio->setSource(playable);
 
     emit sourceChanged();
     emit metadataChanged();

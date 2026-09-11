@@ -2,8 +2,29 @@
 #include "DatabaseManager.h"
 #include <QDebug>
 #include <QFile>
+#include <QFileInfo>
 #include <QUuid>
 #include <algorithm>
+
+namespace {
+
+// The deck plays the .mp3 beside a .cdg, so anything handing it a path has to
+// agree on which of the pair that is - otherwise a caller comparing the queue's
+// path with the deck's sees two different songs.
+QString withPlayableCompanion(const QString &filePath)
+{
+    if (filePath.isEmpty())
+        return filePath;
+    if (QFileInfo(filePath).suffix().compare(QLatin1String("cdg"), Qt::CaseInsensitive) != 0)
+        return filePath;
+
+    const QFileInfo info(filePath);
+    const QString companion = info.absolutePath() + QLatin1Char('/')
+                              + info.completeBaseName() + QStringLiteral(".mp3");
+    return QFile::exists(companion) ? companion : filePath;
+}
+
+} // namespace
 
 SongQueueModel::SongQueueModel(QObject *parent)
     : QAbstractListModel(parent)
@@ -273,7 +294,7 @@ QString SongQueueModel::playablePathAt(int index) const
 
     const SongItem &song = m_songs.at(source);
     if (!song.filePath.isEmpty() && QFile::exists(song.filePath))
-        return song.filePath;
+        return withPlayableCompanion(song.filePath);
 
     // The stored path belongs to another machine. Look the song up in the local
     // library by artist and title, the same way the OpenKJ import matches, and
@@ -291,12 +312,12 @@ QString SongQueueModel::playablePathAt(int index) const
 
         const QString path = row.value(QStringLiteral("filePath")).toString();
         if (!path.isEmpty() && QFile::exists(path))
-            return path;
+            return withPlayableCompanion(path);
     }
 
     // Nothing to substitute; hand back what was stored and let the deck report
     // that the file is missing.
-    return song.filePath;
+    return withPlayableCompanion(song.filePath);
 }
 
 void SongQueueModel::clearQueue()

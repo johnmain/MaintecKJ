@@ -215,7 +215,9 @@ Pane {
                     return
                 if (!mediaPlayer.filePath || mediaPlayer.filePath.length === 0)
                     return
-                if (songQueueModel.filePathAt(rows[0]) !== mediaPlayer.filePath)
+                // Compared through playablePathAt, so a queue row holding the
+                // .cdg half of a pair still recognises the .mp3 the deck loaded.
+                if (songQueueModel.playablePathAt(rows[0]) !== mediaPlayer.filePath)
                     return
                 mediaPlayer.setPitch(songQueueModel.keyShiftAt(rows[0]))
             }
