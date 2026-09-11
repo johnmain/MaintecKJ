@@ -96,13 +96,22 @@ int directoryIdForPath(QSqlDatabase &db, const QString &absPath,
 
 // --- Off-thread measuring ---------------------------------------------------
 
+// ffprobe is an external program. On a machine with no ffmpeg installed there
+// is nothing to measure with, and files still have to be indexed - an unknown
+// duration is a cosmetic problem, an empty library is not.
+bool ffprobeAvailable()
+{
+    static const bool available =
+        !QStandardPaths::findExecutable(QStringLiteral("ffprobe")).isEmpty();
+    return available;
+}
+
 // Runs on a QtConcurrent worker thread, one file per job. Files that already
 // have a length are passed straight through, so a rescan only pays for what is
-// genuinely new. A file ffprobe cannot read comes back with duration 0 and is
-// dropped by the caller.
+// genuinely new. A file ffprobe cannot read comes back with duration 0.
 ScannedFile measureFile(ScannedFile file)
 {
-    if (file.duration > 0)
+    if (file.duration > 0 || !ffprobeAvailable())
         return file;
 
     const int probed = probeDurationSeconds(file.filePath);
@@ -429,9 +438,11 @@ void DatabaseManager::finishScan()
     // auto-committed INSERT, which costs an fsync apiece.
     m_db.transaction();
     for (const ScannedFile &file : measured) {
-        if (file.duration <= 0) {
-            // The extension list decided what to look at; ffprobe decides what
-            // is actually playable, and anything it refuses is left out.
+        // With ffprobe present it doubles as the format gate: the wide extension
+        // list decides what to look at, and a file it cannot decode is left out.
+        // Without ffprobe nothing can be judged, so the row is kept with an
+        // unknown length rather than the whole library coming up empty.
+        if (file.duration <= 0 && ffprobeAvailable()) {
             ++unreadable;
             continue;
         }

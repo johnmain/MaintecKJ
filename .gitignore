@@ -1,4 +1,6 @@
 .aider*
 build/
+build-release/
 .cache/
+dist/
 *.user

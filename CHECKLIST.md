@@ -189,3 +189,23 @@ the whole time background music is playing.
 - [x] The "No Graphics Loaded" caption now appears only when there is neither a CDG nor a configured image
 - [x] Fitted rather than cropped (`PreserveAspectFit`), so a title card or welcome slide is never cut off
 - [x] Verified by `/tmp/bgimg_test.cpp`, which builds the real window and reads the pixels back: with an image configured the secondary window samples the probe's exact colour, and with none configured it samples black
+
+## Packaging & Deployment (COMPLETE)
+
+Goal: hand the app to another CachyOS machine without building it there.
+
+- [x] `MAINTECKJ_QML_DIR` is now defined for development builds only. A development build still reads the QML straight out of the source tree so edits take effect without a rebuild; a Release build does not, so a packaged copy can never fall back to the machine it was built on
+- [x] `main.cpp` searches for `Main.qml` beside the binary, under `share/mainteckj/qml` and under `lib/mainteckj/qml`, with `MAINTECKJ_QML_DIR` as an override, instead of one baked-in absolute path
+- [x] A CPack TGZ package: `cpack --config build-release/CPackConfig.cmake -B dist`
+- [x] `qt_generate_deploy_qml_app_script` rather than the plain `qt_generate_deploy_app_script`. The plain one does not deploy QML imports at all, which leaves a packaged app unable to `import QtQuick`
+- [x] The component panels are listed in the QML module's `QML_FILES` even though they are loaded by URL - that is what lets the deploy step's `qmlimportscanner` see that QtMultimedia and QtQuick.Dialogs are needed
+- [x] The offscreen platform plugin is installed explicitly, since the deploy step only copies what it can detect as a dependency, which here is xcb alone. It also allows the packaged app to be smoke-tested with no display
+- [x] A README and a `run.sh` launcher ship at the root of the archive
+- [x] **Without ffprobe the libraries now index with unknown durations rather than indexing nothing.** ffprobe doubled as the format gate, so a machine with no ffmpeg would have come up with an empty library. Files are still rejected when ffprobe is present and cannot read them
+- [x] Verified by unpacking into an empty directory and running it under `env -i`, with no environment at all: it loaded `.../share/mainteckj/qml/Main.qml` - its own copy, not the source tree - used the bundled `lib/qt6/qml` import path, started the FFmpeg multimedia backend and reported no QML errors. `/tmp/noprobe_test.cpp` covers the no-ffprobe case both ways
+
+Artifact: `dist/MaintecKJ-0.1.0-linux-x86_64.tar.gz`, 157 MB compressed and 381 MB unpacked. `dist/` and `build-release/` are gitignored.
+
+Known constraints:
+- Built against glibc 2.44, so it will not start on a distribution older than roughly this one. libc cannot be bundled around.
+- Qt's deploy copies the whole dependency closure - 605 libraries, including a copy of glibc itself, which is inert on a machine that already has one. That is why the archive is large.
