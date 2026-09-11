@@ -10,6 +10,10 @@ ApplicationWindow {
     height: settings.windowHeight
     title: "MaintecKJ - Karaoke Host System"
 
+    // The background library reaches this through Window.window to mirror the row
+    // it is dragging.
+    property Item dragOverlayItem: dragOverlay
+
     // Persisted UI state (window size + panel proportions)
     Settings {
         id: settings
@@ -147,6 +151,34 @@ ApplicationWindow {
                         settings.rightPanelWidth = width
                 }
             }
+        }
+    }
+
+    // A row dragged out of the background library is mirrored here, at window
+    // level. Inside the library it would be clipped by the list, and anything
+    // the library panel draws itself ends up underneath the panel below it.
+    Rectangle {
+        id: dragOverlay
+        visible: false
+        z: 10000
+        width: 240
+        height: 32
+        radius: 4
+        color: palette.highlight
+        opacity: 0.92
+        border.color: palette.highlightedText
+        border.width: 1
+
+        property string overlayText: ""
+
+        Label {
+            anchors.fill: parent
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+            text: dragOverlay.overlayText
+            color: palette.highlightedText
+            elide: Text.ElideRight
+            verticalAlignment: Text.AlignVCenter
         }
     }
 }

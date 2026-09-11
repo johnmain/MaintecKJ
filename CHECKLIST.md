@@ -96,12 +96,14 @@ singer rotation machinery getting involved.
 - [x] The Singer Rotation panel stays on screen while the Background Music tab is selected
 - [x] `Main.qml` swaps only the two centre panels (library, and queue/playlist) through `Loader.source`
 
-### Known limitations
-- [ ] Indexing probes every new file with `ffprobe` on the UI thread, so a first scan of a few hundred tracks freezes the window for roughly ten to twenty seconds. A worker thread would fix it
-- [ ] Dragging out of the library is clipped at the `ListView` edge, so the dragged row vanishes from view once it leaves the list. The drop itself still lands
+### Indexing and drag (fixed after the first pass)
+- [x] **Indexing no longer blocks the window.** Measuring a file means spawning `ffprobe`, which was far too slow for the UI thread - a few hundred tracks was a fifteen-second freeze. The scan now runs through `QtConcurrent::mapped`, one job per file, and the rows are written once the run reports back - in a single transaction, rather than one auto-committed INSERT (an fsync apiece) per song. Both libraries use it: `addDirectory` and `addBackgroundDirectory` return immediately and emit `libraryScanFinished` / `backgroundScanFinished` when the rows are in
+- [x] Progress is visible: `scanning`, `scanProgress` and `scanTotal` drive a "Measuring n of m files" line, and the folder buttons disable while a run is in flight
+- [x] **The dragged row is no longer clipped.** It is mirrored by an overlay at window level (`Main.qml`'s `dragOverlay`, reached through `Window.window.dragOverlayItem`). The library panel's own drawing would end up underneath the panel below it, which being a later sibling paints over it, so the overlay is the only place the row can be seen all the way down to the playlist
+- [x] The probe jobs run in parallel on the global thread pool, so a large first scan is faster than it was as well as non-blocking. A scan started while another is running is ignored rather than queued; the disabled buttons make that hard to hit
 
 ### Verification
-- [x] `/tmp/bgm_test.cpp` - 31 assertions, all passing: junk extensions ignored, a corrupt `.mp3` rejected by ffprobe, karaoke tables untouched, re-index does not duplicate, Add All idempotent, shuffle follows the loaded song, the playlist survives a reload, karaoke never auto-plays, background auto-advance loads the next entry, end-of-list stops, the fade delays the stop and restores the volume, and the mode is persisted
+- [x] `/tmp/bgm_test.cpp` - 36 assertions, all passing: junk extensions ignored, a corrupt `.mp3` rejected by ffprobe, karaoke tables untouched, re-index does not duplicate, Add All idempotent, shuffle follows the loaded song, the playlist survives a reload, karaoke never auto-plays, background auto-advance loads the next entry, end-of-list stops, the fade delays the stop and restores the volume, the mode is persisted, `addBackgroundDirectory` returns in under 500 ms while the scan is reported running, and the karaoke path still drops the `.cdg` half of a pair
 
 ## Phase 8: OpenKJ Singer Import (COMPLETE)
 

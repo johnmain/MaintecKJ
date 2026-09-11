@@ -4,7 +4,7 @@ project(MaintecKJ VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Sql Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Sql Multimedia Concurrent)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(RUBBERBAND REQUIRED IMPORTED_TARGET rubberband)
@@ -61,6 +61,7 @@ target_link_libraries(mainteckj-app PRIVATE
     Qt6::QuickControls2
     Qt6::Sql
     Qt6::Multimedia
+    Qt6::Concurrent
     PkgConfig::RUBBERBAND
     PkgConfig::ALSA
 )

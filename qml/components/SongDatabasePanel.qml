@@ -18,6 +18,21 @@ Pane {
     readonly property string exportError: songListExporter.lastError ? songListExporter.lastError : ""
     readonly property string exportSummary: songListExporter.lastSummary ? songListExporter.lastSummary : ""
 
+    // Reported by the background index run when it reports back.
+    property string scanMessage: ""
+
+    // Indexing runs off the UI thread now, so rows appear when the run reports
+    // back rather than the instant the folder is added.
+    Connections {
+        target: databaseManager
+        function onLibraryScanFinished(added, unreadable) {
+            songDatabaseModel.refreshData()
+            databasePanel.scanMessage = unreadable > 0
+                ? ("Indexed " + added + " songs; " + unreadable + " files could not be read.")
+                : ("Indexed " + added + " songs.")
+        }
+    }
+
     function formatDuration(seconds) {
         var value = Number(seconds)
         if (!value || value <= 0)
@@ -120,7 +135,6 @@ Pane {
             var path = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
             folderField.text = path
             databaseManager.addDirectory(path)
-            songDatabaseModel.refreshData()
         }
     }
 
@@ -166,26 +180,37 @@ Pane {
 
             Button {
                 text: "Add Folder…"
+                enabled: !databaseManager.scanning
                 onClicked: folderDialog.open()
             }
 
             Button {
                 text: "Rescan"
-                enabled: folderField.text.length > 0
-                onClicked: {
-                    databaseManager.rescanDirectory(folderField.text)
-                    songDatabaseModel.refreshData()
-                }
+                enabled: folderField.text.length > 0 && !databaseManager.scanning
+                onClicked: databaseManager.rescanDirectory(folderField.text)
             }
 
             Button {
                 text: "Remove"
-                enabled: folderField.text.length > 0
+                enabled: folderField.text.length > 0 && !databaseManager.scanning
                 onClicked: {
                     databaseManager.removeDirectory(folderField.text)
                     songDatabaseModel.refreshData()
                 }
             }
+        }
+
+        Label {
+            visible: databaseManager.scanning || databasePanel.scanMessage.length > 0
+            text: databaseManager.scanning
+                  ? ("Measuring " + databaseManager.scanProgress + " of "
+                     + databaseManager.scanTotal + " files…")
+                  : databasePanel.scanMessage
+            font.pixelSize: 10
+            color: databaseManager.scanning ? "#4A90E2" : palette.windowText
+            opacity: databaseManager.scanning ? 1.0 : 0.7
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
         }
 
         // Library-wide actions

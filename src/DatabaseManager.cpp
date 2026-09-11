@@ -6,6 +6,7 @@
 #include <QSet>
 #include <QHash>
 #include <QProcess>
+#include <QtConcurrent>
 
 namespace {
 
@@ -51,18 +52,6 @@ QHash<QString, int> knownDurationsFor(QSqlDatabase &db, int directoryId,
     return durations;
 }
 
-// Only files we have never measured are handed to ffprobe, so a rescan that
-// finds no new songs probes nothing.
-int durationSecondsFor(const QHash<QString, int> &known, const QString &filePath)
-{
-    const int knownSeconds = known.value(filePath, 0);
-    if (knownSeconds > 0)
-        return knownSeconds;
-
-    const int probed = probeDurationSeconds(filePath);
-    return probed > 0 ? probed : 0;
-}
-
 int countSongs(QSqlDatabase &db, const QString &songTable = QStringLiteral("songs"))
 {
     QSqlQuery query(db);
@@ -105,6 +94,65 @@ int directoryIdForPath(QSqlDatabase &db, const QString &absPath,
     return -1;
 }
 
+// --- Off-thread measuring ---------------------------------------------------
+
+// Runs on a QtConcurrent worker thread, one file per job. Files that already
+// have a length are passed straight through, so a rescan only pays for what is
+// genuinely new. A file ffprobe cannot read comes back with duration 0 and is
+// dropped by the caller.
+ScannedFile measureFile(ScannedFile file)
+{
+    if (file.duration > 0)
+        return file;
+
+    const int probed = probeDurationSeconds(file.filePath);
+    file.duration = probed > 0 ? probed : 0;
+    return file;
+}
+
+// Karaoke scan results as rows: the .cdg half of a pair is dropped, as is a
+// second file sharing a base name. Lengths already stored are carried over.
+QVector<ScannedFile> karaokeFilesFrom(const QVector<ParsedSong> &found,
+                                      const QHash<QString, int> &known)
+{
+    QVector<ScannedFile> files;
+    QSet<QString> seenBasePaths;
+
+    for (const ParsedSong &parsed : found) {
+        const QFileInfo info(parsed.filePath);
+        const QString extension = info.suffix().toLower();
+
+        if (extension == QLatin1String("cdg") && parsed.isCdgPair)
+            continue;
+
+        const QString basePath = info.absolutePath() + QLatin1Char('/') + info.completeBaseName();
+        if (seenBasePaths.contains(basePath))
+            continue;
+        seenBasePaths.insert(basePath);
+
+        files.append(ScannedFile{ parsed.artist, parsed.title, parsed.filePath, parsed.source,
+                                  known.value(parsed.filePath, 0) });
+    }
+
+    return files;
+}
+
+// Background scan results as rows. The scanner has already applied the audio
+// extension list and left out the karaoke handling entirely.
+QVector<ScannedFile> audioFilesFrom(const QVector<ParsedSong> &found,
+                                    const QHash<QString, int> &known)
+{
+    QVector<ScannedFile> files;
+    files.reserve(found.size());
+
+    for (const ParsedSong &parsed : found) {
+        files.append(ScannedFile{ parsed.artist, parsed.title, parsed.filePath, parsed.source,
+                                  known.value(parsed.filePath, 0) });
+    }
+
+    return files;
+}
+
 } // namespace
 
 DatabaseManager::DatabaseManager(QObject *parent)
@@ -115,6 +163,11 @@ DatabaseManager::DatabaseManager(QObject *parent)
 
 DatabaseManager::~DatabaseManager()
 {
+    // The measuring jobs themselves touch neither the database nor this object,
+    // but the watcher does, so let a run finish before tearing anything down.
+    if (m_scanWatcher)
+        m_scanWatcher->waitForFinished();
+
     if (m_db.isOpen())
         m_db.close();
 }
@@ -324,6 +377,93 @@ void DatabaseManager::ensureIndexes()
     query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_title ON songs(title)"));
     query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_file_path ON songs(file_path)"));
     query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_directory_id ON songs(directory_id)"));
+}
+
+void DatabaseManager::startScan(QVector<ScannedFile> files, const QString &songTable,
+                                int directoryId, bool background)
+{
+    if (m_scanWatcher) {
+        // Re-indexing while a run is in flight would interleave two result sets.
+        // The panels disable their buttons while `scanning` is true.
+        qDebug() << "A scan is already running; ignoring the new request.";
+        return;
+    }
+
+    m_scanSongTable = songTable;
+    m_scanDirectoryId = directoryId;
+    m_scanIsBackground = background;
+    m_scanProgress = 0;
+    m_scanTotal = static_cast<int>(files.size());
+
+    m_scanWatcher = new QFutureWatcher<ScannedFile>(this);
+
+    connect(m_scanWatcher, &QFutureWatcher<ScannedFile>::finished,
+            this, &DatabaseManager::finishScan);
+    connect(m_scanWatcher, &QFutureWatcher<ScannedFile>::progressRangeChanged, this,
+            [this](int, int) { emit scanProgressChanged(); });
+    connect(m_scanWatcher, &QFutureWatcher<ScannedFile>::progressValueChanged, this,
+            [this](int value) {
+                m_scanProgress = value;
+                emit scanProgressChanged();
+            });
+
+    m_scanWatcher->setFuture(QtConcurrent::mapped(files, &measureFile));
+
+    emit scanProgressChanged();
+}
+
+void DatabaseManager::finishScan()
+{
+    if (!m_scanWatcher)
+        return;
+
+    const QList<ScannedFile> measured = m_scanWatcher->future().results();
+
+    m_scanWatcher->deleteLater();
+    m_scanWatcher = nullptr;
+
+    int added = 0;
+    int unreadable = 0;
+
+    // One transaction for the whole run. Without it each row is its own
+    // auto-committed INSERT, which costs an fsync apiece.
+    m_db.transaction();
+    for (const ScannedFile &file : measured) {
+        if (file.duration <= 0) {
+            // The extension list decided what to look at; ffprobe decides what
+            // is actually playable, and anything it refuses is left out.
+            ++unreadable;
+            continue;
+        }
+
+        if (insertSongRow(m_db, file.artist, file.title, file.filePath, file.duration,
+                          m_scanDirectoryId, file.source, m_scanSongTable)) {
+            ++added;
+        }
+    }
+    m_db.commit();
+
+    const bool wasBackground = m_scanIsBackground;
+    m_scanProgress = m_scanTotal;
+
+    if (wasBackground) {
+        m_backgroundSongCount = countSongs(m_db, QStringLiteral("background_songs"));
+        emit backgroundSongCountChanged();
+    } else {
+        m_songCount = countSongs(m_db);
+        emit songCountChanged();
+    }
+
+    // Reported after the watcher is gone, so `scanning` already reads false.
+    emit scanProgressChanged();
+
+    if (wasBackground)
+        emit backgroundScanFinished(added, unreadable);
+    else
+        emit libraryScanFinished(added, unreadable);
+
+    qDebug() << "Scan finished for" << m_scanSongTable << "added:" << added
+             << "unreadable:" << unreadable;
 }
 
 bool DatabaseManager::addSong(const QString &artist, const QString &title, const QString &filePath, int duration, const QString &source)
@@ -538,31 +678,11 @@ bool DatabaseManager::addDirectory(const QString &directoryPath)
     FolderScanner scanner;
     const QVector<ParsedSong> found = scanner.scanDirectory(absPath);
 
-    int addedCount = 0;
-    QSet<QString> seenBasePaths;
-    for (const ParsedSong &parsed : found) {
-        const QFileInfo info(parsed.filePath);
-        const QString extension = info.suffix().toLower();
+    // The measuring is handed off; the rows land when it reports back.
+    startScan(karaokeFilesFrom(found, knownDurations), QStringLiteral("songs"), dirId, false);
 
-        // Paired .cdg files are represented by their .mp3 companion.
-        if (extension == QLatin1String("cdg") && parsed.isCdgPair)
-            continue;
-
-        const QString basePath = info.absolutePath() + QLatin1Char('/') + info.completeBaseName();
-        if (seenBasePaths.contains(basePath))
-            continue;
-        seenBasePaths.insert(basePath);
-
-        if (insertSongRow(m_db, parsed.artist, parsed.title, parsed.filePath,
-                          durationSecondsFor(knownDurations, parsed.filePath), dirId, parsed.source))
-            addedCount++;
-    }
-
-    m_songCount = countSongs(m_db);
-    emit songCountChanged();
-
-    qDebug() << "Added directory:" << absPath << "new songs:" << addedCount;
-    return addedCount > 0;
+    qDebug() << "Indexing directory:" << absPath << "candidates:" << found.size();
+    return true;
 }
 
 bool DatabaseManager::removeDirectory(const QString &directoryPath)
@@ -618,29 +738,9 @@ void DatabaseManager::rescanDirectory(const QString &directoryPath)
     FolderScanner scanner;
     const QVector<ParsedSong> found = scanner.scanDirectory(absPath);
 
-    int addedCount = 0;
-    QSet<QString> seenBasePaths;
-    for (const ParsedSong &parsed : found) {
-        const QFileInfo info(parsed.filePath);
-        const QString extension = info.suffix().toLower();
+    startScan(karaokeFilesFrom(found, knownDurations), QStringLiteral("songs"), dirId, false);
 
-        if (extension == QLatin1String("cdg") && parsed.isCdgPair)
-            continue;
-
-        const QString basePath = info.absolutePath() + QLatin1Char('/') + info.completeBaseName();
-        if (seenBasePaths.contains(basePath))
-            continue;
-        seenBasePaths.insert(basePath);
-
-        if (insertSongRow(m_db, parsed.artist, parsed.title, parsed.filePath,
-                          durationSecondsFor(knownDurations, parsed.filePath), dirId, parsed.source))
-            addedCount++;
-    }
-
-    m_songCount = countSongs(m_db);
-    emit songCountChanged();
-
-    qDebug() << "Rescanned directory:" << absPath << "songs:" << addedCount;
+    qDebug() << "Rescanning directory:" << absPath << "candidates:" << found.size();
 }
 
 // --- Background music (Phase 7) --------------------------------------------
@@ -676,28 +776,12 @@ bool DatabaseManager::addBackgroundDirectory(const QString &directoryPath)
     FolderScanner scanner;
     const QVector<ParsedSong> found = scanner.scanAudioDirectory(absPath);
 
-    int addedCount = 0;
-    int unreadable = 0;
-    for (const ParsedSong &parsed : found) {
-        const int seconds = durationSecondsFor(knownDurations, parsed.filePath);
-        if (seconds <= 0) {
-            // The wide extension list decided what to look at; ffprobe decides
-            // what is actually playable.
-            ++unreadable;
-            continue;
-        }
+    // Measuring runs off the UI thread; the rows land when it reports back.
+    startScan(audioFilesFrom(found, knownDurations), QStringLiteral("background_songs"),
+              dirId, true);
 
-        if (insertSongRow(m_db, parsed.artist, parsed.title, parsed.filePath, seconds,
-                          dirId, parsed.source, QStringLiteral("background_songs")))
-            ++addedCount;
-    }
-
-    m_backgroundSongCount = countSongs(m_db, QStringLiteral("background_songs"));
-    emit backgroundSongCountChanged();
-
-    qDebug() << "Added background directory:" << absPath << "new songs:" << addedCount
-             << "unreadable:" << unreadable;
-    return addedCount > 0;
+    qDebug() << "Indexing background directory:" << absPath << "candidates:" << found.size();
+    return true;
 }
 
 bool DatabaseManager::removeBackgroundDirectory(const QString &directoryPath)
@@ -745,21 +829,10 @@ void DatabaseManager::rescanBackgroundDirectory(const QString &directoryPath)
     FolderScanner scanner;
     const QVector<ParsedSong> found = scanner.scanAudioDirectory(absPath);
 
-    int addedCount = 0;
-    for (const ParsedSong &parsed : found) {
-        const int seconds = durationSecondsFor(knownDurations, parsed.filePath);
-        if (seconds <= 0)
-            continue;
+    startScan(audioFilesFrom(found, knownDurations), QStringLiteral("background_songs"),
+              dirId, true);
 
-        if (insertSongRow(m_db, parsed.artist, parsed.title, parsed.filePath, seconds,
-                          dirId, parsed.source, QStringLiteral("background_songs")))
-            ++addedCount;
-    }
-
-    m_backgroundSongCount = countSongs(m_db, QStringLiteral("background_songs"));
-    emit backgroundSongCountChanged();
-
-    qDebug() << "Rescanned background directory:" << absPath << "new songs:" << addedCount;
+    qDebug() << "Rescanning background directory:" << absPath << "candidates:" << found.size();
 }
 
 QVariantList DatabaseManager::getAllBackgroundSongs(bool includeDeleted)
