@@ -4,6 +4,8 @@
 #include <QtCore/QUrl>
 #include <QDebug>
 #include <QDir>
+#include <QFile>
+#include <utility>
 #include "SingerModel.h"
 #include "SongQueueModel.h"
 #include "DatabaseManager.h"
@@ -104,18 +106,43 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("openKjImporter", &openKjImporter);
     engine.rootContext()->setContextProperty("songListExporter", &songListExporter);
     
-    // Resolve the generated MaintecKJ QML module (it is emitted next to the
-    // executable) and the QML sources without baking in absolute paths, so the
-    // app runs from any checkout or install prefix.
     // Pick up the mode the app was left in. Deliberately not setMode(): there is
     // no deck to fade out at start-up.
     modeController.restore();
 
-    engine.addImportPath(QCoreApplication::applicationDirPath());
+    // Resolve the generated MaintecKJ QML module (it is emitted next to the
+    // executable) and the QML sources without baking in absolute paths, so the
+    // app runs from any checkout, install prefix or relocated bundle.
+    const QString appDir = QCoreApplication::applicationDirPath();
 
-    QString qmlDir = QString::fromUtf8(MAINTECKJ_QML_DIR);
-    if (qmlDir.isEmpty())
-        qmlDir = QCoreApplication::applicationDirPath() + QStringLiteral("/qml");
+    // A deployed copy keeps the QML beside the binary or under share/; a build
+    // tree only has the source directory, which CMake passes in.
+    QStringList candidates;
+    const QString fromEnvironment = qEnvironmentVariable("MAINTECKJ_QML_DIR");
+    if (!fromEnvironment.isEmpty())
+        candidates << fromEnvironment;
+    const QString fromBuild = QString::fromUtf8(MAINTECKJ_QML_DIR);
+    if (!fromBuild.isEmpty())
+        candidates << fromBuild;
+    candidates << appDir + QStringLiteral("/qml")
+               << appDir + QStringLiteral("/../share/mainteckj/qml")
+               << appDir + QStringLiteral("/../lib/mainteckj/qml");
+
+    QString qmlDir;
+    for (const QString &candidate : std::as_const(candidates)) {
+        const QString normalised = QDir::cleanPath(candidate);
+        if (QFile::exists(normalised + QStringLiteral("/Main.qml"))) {
+            qmlDir = normalised;
+            break;
+        }
+    }
+
+    if (qmlDir.isEmpty()) {
+        qCritical() << "Could not find Main.qml. Looked in:" << candidates;
+        return 1;
+    }
+
+    engine.addImportPath(appDir);
 
     const QUrl url = QUrl::fromLocalFile(qmlDir + QStringLiteral("/Main.qml"));
     qDebug() << "Loading QML from:" << url;
