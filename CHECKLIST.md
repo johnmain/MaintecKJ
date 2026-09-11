@@ -176,3 +176,16 @@ running a separate script over an OpenKJ filename dump.
   }
 ]
 ```
+
+## Phase 10: Secondary Display Background Image (COMPLETE)
+
+Goal: the projector output should not sit on a black screen between songs, or for
+the whole time background music is playing.
+
+- [x] An "Add Background Image..." button on the deck panel, opening a file dialog. Once one is set it becomes "Change Background Image..." with a Clear beside it
+- [x] The choice persists in `QSettings` as `Display/backgroundImage`
+- [x] The image fills the secondary window and sits behind everything, so a karaoke video or a running CDG still wins whenever there is one to show
+- [x] `CdgRenderer` paints solid black whatever its state, so the secondary window's renderer is now hidden until a CDG is actually loaded - left visible it would have covered the image completely
+- [x] The "No Graphics Loaded" caption now appears only when there is neither a CDG nor a configured image
+- [x] Fitted rather than cropped (`PreserveAspectFit`), so a title card or welcome slide is never cut off
+- [x] Verified by `/tmp/bgimg_test.cpp`, which builds the real window and reads the pixels back: with an image configured the secondary window samples the probe's exact colour, and with none configured it samples black

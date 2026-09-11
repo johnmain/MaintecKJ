@@ -1,7 +1,9 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import QtMultimedia
+import QtCore
 import MaintecKJ 1.0
 
 Pane {
@@ -9,6 +11,21 @@ Pane {
     SplitView.minimumWidth: 250
     SplitView.preferredWidth: 320
     SplitView.maximumWidth: 480
+
+    // Shown on the secondary display whenever there is nothing to put there:
+    // between songs, and for the whole time background music is playing.
+    Settings {
+        id: displaySettings
+        category: "Display"
+        property string backgroundImage: ""
+    }
+
+    FileDialog {
+        id: backgroundImageDialog
+        title: "Choose a Background Image"
+        nameFilters: ["Images (*.png *.jpg *.jpeg *.bmp *.webp *.gif *.svg)", "All files (*)"]
+        onAccepted: displaySettings.backgroundImage = selectedFile
+    }
 
     function companionCdg(path) {
         if (!path)
@@ -88,6 +105,25 @@ Pane {
             text: "Launch Secondary Window"
             Layout.fillWidth: true
             onClicked: secondaryWindow.show()
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+
+            Button {
+                text: displaySettings.backgroundImage.length > 0
+                      ? "Change Background Image…"
+                      : "Add Background Image…"
+                Layout.fillWidth: true
+                onClicked: backgroundImageDialog.open()
+            }
+
+            Button {
+                text: "Clear"
+                visible: displaySettings.backgroundImage.length > 0
+                onClicked: displaySettings.backgroundImage = ""
+            }
         }
 
         Rectangle {
@@ -328,6 +364,17 @@ Pane {
         visible: false
         color: "black"
 
+        // Idle backdrop. It sits behind everything, so a CDG or a video still
+        // wins whenever there is one to show.
+        Image {
+            id: secondaryBackground
+            anchors.fill: parent
+            fillMode: Image.PreserveAspectFit
+            asynchronous: true
+            source: displaySettings.backgroundImage
+            visible: displaySettings.backgroundImage.length > 0
+        }
+
         // Takes the shared video sink while this window is shown.
         VideoOutput {
             id: secondaryVideo
@@ -339,12 +386,16 @@ Pane {
         CdgRenderer {
             id: secondaryCdg
             anchors.fill: parent
-            visible: !mediaPlayer.hasVideo
+            // The renderer paints solid black whatever its state, so it has to
+            // stay out of the way unless there really is a CDG loaded - left
+            // visible it would hide the background image completely.
+            visible: !mediaPlayer.hasVideo && secondaryCdg.loaded
         }
 
         Label {
             anchors.centerIn: parent
             visible: !mediaPlayer.hasVideo && !secondaryCdg.loaded
+                     && displaySettings.backgroundImage.length === 0
             text: "No Graphics Loaded"
             color: "white"
             opacity: 0.7
