@@ -1,6 +1,7 @@
 #include "SongQueueModel.h"
 #include "DatabaseManager.h"
 #include <QDebug>
+#include <QFile>
 #include <QUuid>
 #include <algorithm>
 
@@ -262,6 +263,40 @@ QString SongQueueModel::filePathAt(int index) const
     if (source < 0)
         return QString();
     return m_songs[source].filePath;
+}
+
+QString SongQueueModel::playablePathAt(int index) const
+{
+    const int source = sourceIndex(index);
+    if (source < 0)
+        return QString();
+
+    const SongItem &song = m_songs.at(source);
+    if (!song.filePath.isEmpty() && QFile::exists(song.filePath))
+        return song.filePath;
+
+    // The stored path belongs to another machine. Look the song up in the local
+    // library by artist and title, the same way the OpenKJ import matches, and
+    // hand back a path that is actually here.
+    if (!m_databaseManager)
+        return song.filePath;
+
+    const QVariantList candidates = m_databaseManager->searchSongs(song.songTitle);
+    for (const QVariant &candidate : std::as_const(candidates)) {
+        const QVariantMap row = candidate.toMap();
+        if (row.value(QStringLiteral("artist")).toString().compare(song.artist, Qt::CaseInsensitive) != 0)
+            continue;
+        if (row.value(QStringLiteral("title")).toString().compare(song.songTitle, Qt::CaseInsensitive) != 0)
+            continue;
+
+        const QString path = row.value(QStringLiteral("filePath")).toString();
+        if (!path.isEmpty() && QFile::exists(path))
+            return path;
+    }
+
+    // Nothing to substitute; hand back what was stored and let the deck report
+    // that the file is missing.
+    return song.filePath;
 }
 
 void SongQueueModel::clearQueue()

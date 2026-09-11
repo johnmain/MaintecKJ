@@ -324,16 +324,20 @@ Pane {
                     }
 
                     onDoubleClicked: {
-                        if (!model.filePath || model.filePath.length === 0)
+                        // playablePathAt substitutes the library's own copy when the
+                        // stored path belongs to another machine, which is what an
+                        // OpenKJ import leaves behind when it ran before the local
+                        // library was indexed.
+                        var path = songQueueModel.playablePathAt(index)
+                        if (!path || path.length === 0)
                             return
 
-                        mediaPlayer.load(model.filePath)
-                        // Apply this queue item's saved key shift before it plays.
+                        // load() starts playback itself. Calling play() as well would
+                        // restart whatever was loaded before when this file turns
+                        // out to be missing.
+                        mediaPlayer.load(path)
+                        // Apply this queue item's saved key shift.
                         mediaPlayer.setPitch(model.keyShift)
-                        // Double-clicking a specific entry is an explicit "play
-                        // this now", unlike the rotation, which only ever selects
-                        // the next singer and deliberately starts nothing.
-                        mediaPlayer.play()
                         songQueueModel.markAsPlayed(index, true)
                     }
                 }

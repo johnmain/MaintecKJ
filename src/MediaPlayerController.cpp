@@ -6,6 +6,7 @@
 #include <QMediaMetaData>
 #include <QVideoSink>
 #include <QFileInfo>
+#include <QFile>
 #include <QUrl>
 #include <QDebug>
 
@@ -57,7 +58,11 @@ MediaPlayerController::MediaPlayerController(QObject *parent)
     });
     connect(m_audio, &RubberBandAudioEngine::errorOccurred, this,
             [this](const QString &message) {
+                // Whatever went wrong, there is nothing coming out of the deck, so
+                // it must stop claiming to play.
+                m_audio->stop();
                 m_errorString = message;
+                emit playingChanged();
                 emit errorChanged();
                 qWarning() << "Audio engine error:" << message;
             });
@@ -222,6 +227,25 @@ void MediaPlayerController::load(const QString &filePath)
     const QFileInfo info(filePath);
     m_title = info.completeBaseName();
     m_artist.clear();
+
+    // A queue row can point at a file that is not on this machine - an OpenKJ
+    // import done before the local library was indexed keeps the old computer's
+    // path. Say so and stay stopped. Without this the deck reports the song as
+    // loaded and playing while nothing comes out, which is baffling.
+    if (!QFile::exists(filePath)) {
+        // Clear the engine rather than just stopping it: otherwise the previous
+        // song stays primed and the Play button would start that instead.
+        m_audio->setSource(QString());
+        m_playerIsVideo = false;
+        m_errorString = tr("File not found: %1").arg(filePath);
+
+        emit sourceChanged();
+        emit metadataChanged();
+        emit hasVideoChanged();
+        emit playingChanged();
+        emit errorChanged();
+        return;
+    }
 
     m_player->setSource(QUrl::fromLocalFile(filePath));
     static const QStringList videoSuffixes = {

@@ -58,6 +58,11 @@ public:
     // Path of the song on this visible row, so callers can tell whether it is
     // the one currently loaded in the deck.
     Q_INVOKABLE QString filePathAt(int index) const;
+    // The same, except that a stored path which is not on this machine is swapped
+    // for the library's own copy of that song. An OpenKJ import done before the
+    // local library was indexed keeps the old computer's paths, and those rows
+    // otherwise load and then silently never play.
+    Q_INVOKABLE QString playablePathAt(int index) const;
     Q_INVOKABLE void clearQueue();
 
     // Bulk insert. While active, adding songs skips the full-queue rewrite that
