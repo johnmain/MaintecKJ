@@ -324,12 +324,17 @@ Pane {
                     }
 
                     onDoubleClicked: {
-                        if (model.filePath && model.filePath.length > 0) {
-                            mediaPlayer.load(model.filePath)
-                            // Apply this queue item's saved key shift.
-                            mediaPlayer.setPitch(model.keyShift)
-                            songQueueModel.markAsPlayed(index, true)
-                        }
+                        if (!model.filePath || model.filePath.length === 0)
+                            return
+
+                        mediaPlayer.load(model.filePath)
+                        // Apply this queue item's saved key shift before it plays.
+                        mediaPlayer.setPitch(model.keyShift)
+                        // Double-clicking a specific entry is an explicit "play
+                        // this now", unlike the rotation, which only ever selects
+                        // the next singer and deliberately starts nothing.
+                        mediaPlayer.play()
+                        songQueueModel.markAsPlayed(index, true)
                     }
                 }
             }
