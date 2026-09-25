@@ -4,6 +4,33 @@
 #include <QFileInfo>
 #include <QDirIterator>
 
+namespace {
+
+// Turns the literal text between two tokens (" - ", " / ", ...) into a regex
+// fragment. Spacing is made flexible, so " - " also matches "-" or "  -  ".
+QString patternSeparatorRegex(const QString &literal)
+{
+    // Built by hand rather than QRegularExpression::escape() on the whole
+    // literal: escape() also escapes spaces, which then cannot be turned back
+    // into a flexible \s*. Runs of whitespace collapse to a single \s*.
+    QString regex;
+    bool inSpace = false;
+    for (const QChar &ch : literal) {
+        if (ch.isSpace()) {
+            if (!inSpace) {
+                regex += QStringLiteral("\\s*");
+                inSpace = true;
+            }
+            continue;
+        }
+        inSpace = false;
+        regex += QRegularExpression::escape(QString(ch));
+    }
+    return regex;
+}
+
+} // namespace
+
 FolderScanner::FolderScanner(QObject *parent)
     : QObject(parent)
 {
@@ -36,7 +63,7 @@ QStringList FolderScanner::supportedPatterns() const
     };
 }
 
-QVector<ParsedSong> FolderScanner::scanDirectory(const QString &directoryPath)
+QVector<ParsedSong> FolderScanner::scanDirectory(const QString &directoryPath, const QString &pattern)
 {
     QVector<ParsedSong> results;
     
@@ -51,7 +78,7 @@ QVector<ParsedSong> FolderScanner::scanDirectory(const QString &directoryPath)
     
     // Process each file
     for (const QString &filePath : supportedFiles) {
-        ParsedSong parsed = parseFileName(QFileInfo(filePath).fileName());
+        ParsedSong parsed = parseFileName(QFileInfo(filePath).fileName(), pattern);
         parsed.filePath = filePath;
         parsed.extension = QFileInfo(filePath).suffix().toLower();
         parsed.isCdgPair = isCdgPair(filePath);
@@ -114,7 +141,7 @@ QVector<ParsedSong> FolderScanner::scanAudioDirectory(const QString &directoryPa
     return results;
 }
 
-ParsedSong FolderScanner::parseFileName(const QString &fileName)
+ParsedSong FolderScanner::parseFileName(const QString &fileName, const QString &pattern)
 {
     ParsedSong parsed;
     parsed.artist = "Unknown Artist";
@@ -124,10 +151,6 @@ ParsedSong FolderScanner::parseFileName(const QString &fileName)
     parsed.isZipArchive = false;
 
     const QString baseName = QFileInfo(fileName).completeBaseName().trimmed();
-
-    // Split on a spaced hyphen so artist/title separators work regardless of spacing.
-    const QStringList parts = baseName.split(QRegularExpression(QStringLiteral(R"(\s+-\s+)")),
-                                             Qt::SkipEmptyParts);
 
     auto cleanTitle = [](QString title) {
         static const QList<QRegularExpression> patterns = {
@@ -168,36 +191,53 @@ ParsedSong FolderScanner::parseFileName(const QString &fileName)
             source = bracketMatch.captured(1).trimmed();
     }
 
-    if (parts.size() >= 3) {
-        // Only treat as {Track} - {Artist} - {Title} when the first part is a track number.
-        static const QRegularExpression trackRe(QStringLiteral(R"(^\s*\d{1,3}\s*[\.,\)]?\s*$)"));
-        const bool trackNumbered = trackRe.match(parts.at(0)).hasMatch();
-
-        if (trackNumbered) {
-            parsed.artist = parts.at(1).trimmed();
-            parsed.title = parts.mid(2).join(QStringLiteral(" - ")).trimmed();
-        } else {
-            parsed.artist = parts.at(0).trimmed();
-            parsed.title = parts.mid(1).join(QStringLiteral(" - ")).trimmed();
-
-            // Source hint 2: a trailing " - <disc>" segment (e.g. "... - Karaoke Version from Zoom Karaoke")
-            if (source.isEmpty()) {
-                const QString segment = parts.mid(2).join(QStringLiteral(" - ")).trimmed();
-                static const QRegularExpression fromRe(
-                    QStringLiteral(R"(^\s*(?:karaoke\s+version\s+)?(?:from|by)\s+(.+)$)"),
-                    QRegularExpression::CaseInsensitiveOption);
-                const QRegularExpressionMatch fromMatch = fromRe.match(segment);
-                if (fromMatch.hasMatch())
-                    source = fromMatch.captured(1).trimmed();
-                else if (!segment.isEmpty())
-                    source = segment;
-            }
-        }
-    } else if (parts.size() == 2) {
-        parsed.artist = parts.at(0).trimmed();
-        parsed.title = parts.at(1).trimmed();
+    // An explicit pattern wins over the heuristics: it is what the operator
+    // picked for this folder, so it is trusted to be the right split.
+    QString patternArtist;
+    QString patternTitle;
+    QString patternSource;
+    if (!pattern.isEmpty()
+        && applyPattern(baseName, pattern, patternArtist, patternTitle, patternSource)) {
+        parsed.artist = patternArtist;
+        parsed.title = patternTitle;
+        if (!patternSource.isEmpty())
+            source = patternSource;
     } else {
-        parsed.title = baseName;
+        // Split on a spaced hyphen so artist/title separators work regardless of spacing.
+        const QStringList parts = baseName.split(QRegularExpression(QStringLiteral(R"(\s+-\s+)")),
+                                                 Qt::SkipEmptyParts);
+
+        if (parts.size() >= 3) {
+            // Only treat as {Track} - {Artist} - {Title} when the first part is a track number.
+            static const QRegularExpression trackRe(QStringLiteral(R"(^\s*\d{1,3}\s*[\.,\)]?\s*$)"));
+            const bool trackNumbered = trackRe.match(parts.at(0)).hasMatch();
+
+            if (trackNumbered) {
+                parsed.artist = parts.at(1).trimmed();
+                parsed.title = parts.mid(2).join(QStringLiteral(" - ")).trimmed();
+            } else {
+                parsed.artist = parts.at(0).trimmed();
+                parsed.title = parts.mid(1).join(QStringLiteral(" - ")).trimmed();
+
+                // Source hint 2: a trailing " - <disc>" segment (e.g. "... - Karaoke Version from Zoom Karaoke")
+                if (source.isEmpty()) {
+                    const QString segment = parts.mid(2).join(QStringLiteral(" - ")).trimmed();
+                    static const QRegularExpression fromRe(
+                        QStringLiteral(R"(^\s*(?:karaoke\s+version\s+)?(?:from|by)\s+(.+)$)"),
+                        QRegularExpression::CaseInsensitiveOption);
+                    const QRegularExpressionMatch fromMatch = fromRe.match(segment);
+                    if (fromMatch.hasMatch())
+                        source = fromMatch.captured(1).trimmed();
+                    else if (!segment.isEmpty())
+                        source = segment;
+                }
+            }
+        } else if (parts.size() == 2) {
+            parsed.artist = parts.at(0).trimmed();
+            parsed.title = parts.at(1).trimmed();
+        } else {
+            parsed.title = baseName;
+        }
     }
 
     parsed.title = cleanTitle(parsed.title);
@@ -210,6 +250,84 @@ ParsedSong FolderScanner::parseFileName(const QString &fileName)
         parsed.title = baseName;
 
     return parsed;
+}
+
+bool FolderScanner::compilePattern(const QString &pattern, QRegularExpression &regex,
+                                   QStringList &fields, QString &error) const
+{
+    static const QRegularExpression tokenRe(
+        QStringLiteral(R"(\{(Artist|Title|Track|Source|Disc)\})"));
+
+    fields.clear();
+    error.clear();
+
+    if (tokenRe.match(pattern).hasMatch()) {
+        // Token pattern: each token becomes a capture group, the text between
+        // them a separator.
+        QString built = QStringLiteral("^");
+        int last = 0;
+        QRegularExpressionMatchIterator it = tokenRe.globalMatch(pattern);
+        while (it.hasNext()) {
+            const QRegularExpressionMatch token = it.next();
+            built += patternSeparatorRegex(pattern.mid(last, token.capturedStart() - last));
+            fields.append(token.captured(1).toLower());
+            built += QStringLiteral("(.*?)");
+            last = token.capturedEnd();
+        }
+        built += patternSeparatorRegex(pattern.mid(last));
+        built += QStringLiteral("$");
+
+        regex = QRegularExpression(built);
+        if (!regex.isValid()) {
+            error = regex.errorString();
+            return false;
+        }
+        return true;
+    }
+
+    // Anything else is a regular expression: group 1 is the Artist and group 2
+    // the Title, matching what the custom-pattern dialog tells the operator.
+    regex = QRegularExpression(pattern);
+    if (!regex.isValid()) {
+        error = regex.errorString();
+        return false;
+    }
+    if (regex.captureCount() < 2) {
+        error = QStringLiteral("Needs two capture groups: (artist) and (title)");
+        return false;
+    }
+    fields << QStringLiteral("artist") << QStringLiteral("title");
+    return true;
+}
+
+bool FolderScanner::applyPattern(const QString &baseName, const QString &pattern,
+                                 QString &artist, QString &title, QString &source)
+{
+    QRegularExpression regex;
+    QStringList fields;
+    QString error;
+    if (!compilePattern(pattern, regex, fields, error))
+        return false;
+
+    const QRegularExpressionMatch match = regex.match(baseName);
+    if (!match.hasMatch())
+        return false;
+
+    artist.clear();
+    title.clear();
+    source.clear();
+    for (int i = 0; i < fields.size(); ++i) {
+        const QString value = match.captured(i + 1).trimmed();
+        const QString field = fields.at(i);
+        if (field == QLatin1String("artist"))
+            artist = value;
+        else if (field == QLatin1String("title"))
+            title = value;
+        else if (field == QLatin1String("source") || field == QLatin1String("disc"))
+            source = value;
+    }
+
+    return !artist.isEmpty() || !title.isEmpty();
 }
 
 bool FolderScanner::isFileInSupportedPattern(const QString &fileName)
@@ -370,4 +488,68 @@ QString FolderScanner::testParse(const QString &fileName)
 {
     ParsedSong parsed = parseFileName(fileName);
     return parsed.artist + " - " + parsed.title;
+}
+
+QVariantMap FolderScanner::testPattern(const QString &fileName, const QString &pattern) const
+{
+    QVariantMap result;
+    result[QStringLiteral("ok")] = false;
+    result[QStringLiteral("artist")] = QString();
+    result[QStringLiteral("title")] = QString();
+    result[QStringLiteral("error")] = QString();
+
+    if (pattern.trimmed().isEmpty()) {
+        result[QStringLiteral("error")] = QStringLiteral("Enter a pattern");
+        return result;
+    }
+
+    // Strip only a recognised media extension. completeBaseName() would treat
+    // the dot in an extension-less example like "03. Artist - Title" as the
+    // start of a suffix and throw the rest away.
+    static const QStringList knownExtensions = {
+        QStringLiteral("mp3"), QStringLiteral("cdg"), QStringLiteral("zip"),
+        QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("avi"),
+        QStringLiteral("wav"), QStringLiteral("flac"), QStringLiteral("m4a"),
+        QStringLiteral("ogg"), QStringLiteral("opus"), QStringLiteral("wma"),
+        QStringLiteral("aiff"), QStringLiteral("aif"),
+    };
+    QString baseName = fileName.trimmed();
+    const int dot = baseName.lastIndexOf(QLatin1Char('.'));
+    if (dot > 0 && knownExtensions.contains(baseName.mid(dot + 1).toLower()))
+        baseName = baseName.left(dot).trimmed();
+
+    if (baseName.isEmpty()) {
+        result[QStringLiteral("error")] = QStringLiteral("Enter an example filename");
+        return result;
+    }
+
+    QRegularExpression regex;
+    QStringList fields;
+    QString error;
+    if (!compilePattern(pattern, regex, fields, error)) {
+        result[QStringLiteral("error")] = error;
+        return result;
+    }
+
+    const QRegularExpressionMatch match = regex.match(baseName);
+    if (!match.hasMatch()) {
+        result[QStringLiteral("error")] = QStringLiteral("No match");
+        return result;
+    }
+
+    QString artist;
+    QString title;
+    for (int i = 0; i < fields.size(); ++i) {
+        const QString value = match.captured(i + 1).trimmed();
+        const QString field = fields.at(i);
+        if (field == QLatin1String("artist"))
+            artist = value;
+        else if (field == QLatin1String("title"))
+            title = value;
+    }
+
+    result[QStringLiteral("ok")] = true;
+    result[QStringLiteral("artist")] = artist;
+    result[QStringLiteral("title")] = title;
+    return result;
 }

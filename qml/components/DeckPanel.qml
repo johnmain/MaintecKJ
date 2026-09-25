@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Dialogs
+import QtQuick.Window
 import QtMultimedia
 import QtCore
 import MaintecKJ 1.0
@@ -13,19 +13,12 @@ Pane {
     SplitView.maximumWidth: 480
 
     // Shown on the secondary display whenever there is nothing to put there:
-    // between songs, and for the whole time background music is playing.
-    Settings {
-        id: displaySettings
-        category: "Display"
-        property string backgroundImage: ""
-    }
-
-    FileDialog {
-        id: backgroundImageDialog
-        title: "Choose a Background Image"
-        nameFilters: ["Images (*.png *.jpg *.jpeg *.bmp *.webp *.gif *.svg)", "All files (*)"]
-        onAccepted: displaySettings.backgroundImage = selectedFile
-    }
+    // between songs, and for the whole time background music is playing. The
+    // settings object itself lives on the main window, so the Settings tab and
+    // this deck share one instance and a change there reaches the display at
+    // once. It is captured here because inside the secondary window below,
+    // Window.window would be that window, not the main one.
+    readonly property QtObject displaySettings: Window.window ? Window.window.displaySettings : null
 
     function companionCdg(path) {
         if (!path)
@@ -157,25 +150,6 @@ Pane {
             text: "Launch Secondary Window"
             Layout.fillWidth: true
             onClicked: secondaryWindow.show()
-        }
-
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 6
-
-            Button {
-                text: displaySettings.backgroundImage.length > 0
-                      ? "Change Background Image…"
-                      : "Add Background Image…"
-                Layout.fillWidth: true
-                onClicked: backgroundImageDialog.open()
-            }
-
-            Button {
-                text: "Clear"
-                visible: displaySettings.backgroundImage.length > 0
-                onClicked: displaySettings.backgroundImage = ""
-            }
         }
 
         Rectangle {
@@ -423,8 +397,9 @@ Pane {
             anchors.fill: parent
             fillMode: Image.PreserveAspectFit
             asynchronous: true
-            source: displaySettings.backgroundImage
-            visible: displaySettings.backgroundImage.length > 0
+            source: deckPanel.displaySettings ? deckPanel.displaySettings.backgroundImage : ""
+            visible: deckPanel.displaySettings !== null
+                     && deckPanel.displaySettings.backgroundImage.length > 0
         }
 
         // Takes the shared video sink while this window is shown.
@@ -447,7 +422,8 @@ Pane {
         Label {
             anchors.centerIn: parent
             visible: !mediaPlayer.hasVideo && !secondaryCdg.loaded
-                     && displaySettings.backgroundImage.length === 0
+                     && (deckPanel.displaySettings === null
+                         || deckPanel.displaySettings.backgroundImage.length === 0)
             text: "No Graphics Loaded"
             color: "white"
             opacity: 0.7

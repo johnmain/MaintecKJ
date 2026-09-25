@@ -13,23 +13,12 @@ Pane {
     readonly property color stripeColor: Qt.rgba(palette.windowText.r, palette.windowText.g, palette.windowText.b, 0.05)
     readonly property color stripeHoverColor: Qt.rgba(palette.windowText.r, palette.windowText.g, palette.windowText.b, 0.12)
 
-    // A null QString arrives in QML as undefined, so normalise before asking
-    // either of these for a length.
-    readonly property string exportError: songListExporter.lastError ? songListExporter.lastError : ""
-    readonly property string exportSummary: songListExporter.lastSummary ? songListExporter.lastSummary : ""
-
-    // Reported by the background index run when it reports back.
-    property string scanMessage: ""
-
-    // Indexing runs off the UI thread now, so rows appear when the run reports
-    // back rather than the instant the folder is added.
+    // Every refresh - filter, sort, rescan, delete, restore - resets the rows, so
+    // an index-keyed selection would otherwise point at the wrong songs after it.
     Connections {
-        target: databaseManager
-        function onLibraryScanFinished(added, unreadable) {
-            songDatabaseModel.refreshData()
-            databasePanel.scanMessage = unreadable > 0
-                ? ("Indexed " + added + " songs; " + unreadable + " files could not be read.")
-                : ("Indexed " + added + " songs.")
+        target: songDatabaseModel
+        function onModelReset() {
+            songList.clearSelection()
         }
     }
 
@@ -158,25 +147,6 @@ Pane {
         }
     }
 
-    FolderDialog {
-        id: folderDialog
-        title: "Select Music Folder"
-        onAccepted: {
-            var path = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
-            folderField.text = path
-            databaseManager.addDirectory(path)
-        }
-    }
-
-    FileDialog {
-        id: songListExportDialog
-        title: "Export Song List"
-        fileMode: FileDialog.SaveFile
-        defaultSuffix: "json"
-        nameFilters: ["JSON files (*.json)", "All files (*)"]
-        onAccepted: songListExporter.exportToFile(selectedFile)
-    }
-
     ColumnLayout {
         anchors.fill: parent
         spacing: 8
@@ -195,74 +165,6 @@ Pane {
             Button {
                 text: "Refresh"
                 onClicked: songDatabaseModel.refreshData()
-            }
-        }
-
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 8
-
-            TextField {
-                id: folderField
-                placeholderText: "Music folder path (e.g. /home/user/Karaoke)..."
-                Layout.fillWidth: true
-            }
-
-            Button {
-                text: "Add Folder…"
-                enabled: !databaseManager.scanning
-                onClicked: folderDialog.open()
-            }
-
-            Button {
-                text: "Rescan"
-                enabled: folderField.text.length > 0 && !databaseManager.scanning
-                onClicked: databaseManager.rescanDirectory(folderField.text)
-            }
-
-            Button {
-                text: "Remove"
-                enabled: folderField.text.length > 0 && !databaseManager.scanning
-                onClicked: {
-                    databaseManager.removeDirectory(folderField.text)
-                    songDatabaseModel.refreshData()
-                }
-            }
-        }
-
-        Label {
-            visible: databaseManager.scanning || databasePanel.scanMessage.length > 0
-            text: databaseManager.scanning
-                  ? ("Measuring " + databaseManager.scanProgress + " of "
-                     + databaseManager.scanTotal + " files…")
-                  : databasePanel.scanMessage
-            font.pixelSize: 10
-            color: databaseManager.scanning ? "#4A90E2" : palette.windowText
-            opacity: databaseManager.scanning ? 1.0 : 0.7
-            wrapMode: Text.WordWrap
-            Layout.fillWidth: true
-        }
-
-        // Library-wide actions
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 8
-
-            // Plain Artist/Title pairs, deduplicated, for the song-book workflow.
-            Button {
-                text: "Export Song List…"
-                onClicked: songListExportDialog.open()
-            }
-
-            Label {
-                text: databasePanel.exportError.length > 0
-                      ? databasePanel.exportError
-                      : databasePanel.exportSummary
-                visible: text.length > 0
-                color: databasePanel.exportError.length > 0 ? "#CC0000" : "#00AA00"
-                font.pixelSize: 10
-                elide: Text.ElideRight
-                Layout.fillWidth: true
             }
         }
 

@@ -58,6 +58,7 @@ qt_add_qml_module(MaintecKJ
         qml/components/BackgroundLibraryPanel.qml
         qml/components/BackgroundPlaylistPanel.qml
         qml/components/DeckPanel.qml
+        qml/components/SettingsPanel.qml
         qml/components/SingerPanel.qml
         qml/components/SingerQueuePanel.qml
         qml/components/SongDatabasePanel.qml

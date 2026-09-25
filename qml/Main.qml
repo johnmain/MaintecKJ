@@ -25,6 +25,17 @@ ApplicationWindow {
         property real queuePanelFraction: 0.33
     }
 
+    // Idle backdrop for the secondary window. It lives here rather than in the
+    // deck so the Settings tab and the deck share one instance: two Settings
+    // objects on the same key do not notify each other, so a change in one would
+    // not reach the other until the next launch.
+    Settings {
+        id: displaySettingsStore
+        category: "Display"
+        property string backgroundImage: ""
+    }
+    readonly property QtObject displaySettings: displaySettingsStore
+
     onWidthChanged: settings.windowWidth = width
     onHeightChanged: settings.windowHeight = height
 
@@ -43,6 +54,10 @@ ApplicationWindow {
                 id: modeTabs
                 Layout.fillWidth: false
 
+                // Settings is a third tab but not a playback mode, so it stays out
+                // of modeController and is handled entirely here.
+                readonly property int settingsIndex: 2
+
                 TabButton {
                     text: "\uD83C\uDFA4  Karaoke"
                     implicitWidth: 150
@@ -51,15 +66,26 @@ ApplicationWindow {
                     text: "\uD83C\uDFB5  Background Music"
                     implicitWidth: 200
                 }
+                TabButton {
+                    text: "\u2699  Settings"
+                    implicitWidth: 120
+                }
 
                 Component.onCompleted: currentIndex = modeController.background ? 1 : 0
-                onCurrentIndexChanged: modeController.mode = (currentIndex === 1) ? "background" : "karaoke"
+                onCurrentIndexChanged: {
+                    if (currentIndex === settingsIndex)
+                        return
+                    modeController.mode = (currentIndex === 1) ? "background" : "karaoke"
+                }
 
                 // The mode can also change from the stored setting, so follow it
-                // back. The guard stops the two from chasing each other.
+                // back. The guard stops the two from chasing each other, and
+                // leaves the settings tab alone.
                 Connections {
                     target: modeController
                     function onModeChanged() {
+                        if (modeTabs.currentIndex === modeTabs.settingsIndex)
+                            return
                         var wanted = modeController.background ? 1 : 0
                         if (modeTabs.currentIndex !== wanted)
                             modeTabs.currentIndex = wanted
@@ -82,6 +108,9 @@ ApplicationWindow {
         SplitView {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            // The Settings tab takes the whole workspace, so the split view steps
+            // aside while it is showing.
+            visible: modeTabs.currentIndex !== modeTabs.settingsIndex
             orientation: Qt.Horizontal
 
             // Singer Panel (Left) - stays put in both modes
@@ -151,6 +180,17 @@ ApplicationWindow {
                         settings.rightPanelWidth = width
                 }
             }
+        }
+
+        // Full-window settings, shown in place of the split view. It stays
+        // instantiated so its scan-finished hook keeps refreshing the library
+        // even while another tab is on screen.
+        Loader {
+            id: settingsPanel
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: modeTabs.currentIndex === modeTabs.settingsIndex
+            source: Qt.resolvedUrl("components/SettingsPanel.qml")
         }
     }
 

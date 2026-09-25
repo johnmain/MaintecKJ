@@ -8,6 +8,7 @@
 #include <QSqlError>
 #include <QString>
 #include <QVariantList>
+#include <QVariantMap>
 #include <QVector>
 #include <QStandardPaths>
 #include <QDir>
@@ -71,10 +72,39 @@ public:
     QVariantList getSongsByArtist(const QString &artist);
     QVariantList getSongsByTitle(const QString &title);
 
-    // Directory operations
-    Q_INVOKABLE bool addDirectory(const QString &directoryPath);
+    // Directory operations. `pattern` is the naming pattern the folder is
+    // indexed with; empty means the default {Artist} - {Title}.
+    Q_INVOKABLE bool addDirectory(const QString &directoryPath, const QString &pattern = QString());
     Q_INVOKABLE bool removeDirectory(const QString &directoryPath);
     Q_INVOKABLE void rescanDirectory(const QString &directoryPath);
+    // Re-indexes a folder under a new naming pattern, so a mis-parsed library
+    // can be corrected without removing and re-adding it.
+    Q_INVOKABLE bool setDirectoryPattern(const QString &directoryPath, const QString &pattern);
+
+    // The karaoke search directories, each with the number of live songs it
+    // holds. Read-only and short enough to sit here with the other small
+    // accessors; the settings panel lists them OpenKJ-style.
+    Q_INVOKABLE QVariantList getDirectories() const
+    {
+        QVariantList result;
+        QSqlQuery query(m_db);
+        if (query.exec(QStringLiteral(
+                "SELECT d.id, d.path, "
+                "COALESCE(NULLIF(d.pattern, ''), '{Artist} - {Title}'), "
+                "(SELECT COUNT(*) FROM songs s "
+                " WHERE s.directory_id = d.id AND s.is_deleted = 0) "
+                "FROM directories d ORDER BY d.path"))) {
+            while (query.next()) {
+                QVariantMap row;
+                row[QStringLiteral("id")] = query.value(0).toInt();
+                row[QStringLiteral("path")] = query.value(1).toString();
+                row[QStringLiteral("pattern")] = query.value(2).toString();
+                row[QStringLiteral("songCount")] = query.value(3).toInt();
+                result.append(row);
+            }
+        }
+        return result;
+    }
 
     // Background music (Phase 7). Deliberately separate tables, not a flag on
     // `songs`: the folders are different folders, so the karaoke library and the

@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
 import QtQuick.Layouts
 
 Pane {
@@ -10,19 +9,6 @@ Pane {
 
     // Theme-aware row shading, so long lists are easier to follow.
     readonly property color stripeColor: Qt.rgba(palette.windowText.r, palette.windowText.g, palette.windowText.b, 0.05)
-
-    // A null QString arrives in QML as undefined, so normalise before asking
-    // either of these for a length.
-    readonly property string importError: openKjImporter.lastError ? openKjImporter.lastError : ""
-    readonly property string importSummary: openKjImporter.lastSummary ? openKjImporter.lastSummary : ""
-
-    // OpenKJ writes JSON; its older XML flavour is read as well.
-    FileDialog {
-        id: openKjImportDialog
-        title: "Import singers from OpenKJ"
-        nameFilters: ["OpenKJ export (*.json *.xml)", "All files (*)"]
-        onAccepted: openKjImporter.importFromFile(selectedFile)
-    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -269,24 +255,6 @@ Pane {
                     Layout.fillWidth: true
                     enabled: rotationController.currentSinger.length > 0
                     onClicked: rotationController.skipCurrentSinger()
-                }
-
-                // Bring a regulars list over from OpenKJ, singers and history.
-                Button {
-                    text: "\uD83D\uDCC2 Import from OpenKJ"
-                    Layout.fillWidth: true
-                    onClicked: openKjImportDialog.open()
-                }
-
-                Label {
-                    text: singerPanel.importError.length > 0
-                          ? singerPanel.importError
-                          : singerPanel.importSummary
-                    visible: text.length > 0
-                    color: singerPanel.importError.length > 0 ? "#CC0000" : "#00AA00"
-                    font.pixelSize: 10
-                    wrapMode: Text.WordWrap
-                    Layout.fillWidth: true
                 }
             }
         }

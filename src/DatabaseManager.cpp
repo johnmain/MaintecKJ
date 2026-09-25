@@ -94,6 +94,21 @@ int directoryIdForPath(QSqlDatabase &db, const QString &absPath,
     return -1;
 }
 
+// The naming pattern stored for a folder, or the default when it has none.
+QString patternForDirectory(QSqlDatabase &db, int directoryId,
+                            const QString &directoryTable = QStringLiteral("directories"))
+{
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT pattern FROM %1 WHERE id = ?").arg(directoryTable));
+    query.addBindValue(directoryId);
+    if (query.exec() && query.next()) {
+        const QString pattern = query.value(0).toString().trimmed();
+        if (!pattern.isEmpty())
+            return pattern;
+    }
+    return QStringLiteral("{Artist} - {Title}");
+}
+
 // --- Off-thread measuring ---------------------------------------------------
 
 // ffprobe is an external program. On a machine with no ffmpeg installed there
@@ -218,9 +233,25 @@ bool DatabaseManager::initializeDatabase()
     if (!query.exec(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS directories ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "path TEXT UNIQUE)"))) {
+            "path TEXT UNIQUE, "
+            "pattern TEXT)"))) {
         qDebug() << "Error creating directories table:" << query.lastError().text();
         return false;
+    }
+
+    // Migrate: the naming pattern each karaoke folder is indexed with.
+    bool hasDirectoryPattern = false;
+    if (query.exec(QStringLiteral("PRAGMA table_info(directories)"))) {
+        while (query.next()) {
+            if (query.value(1).toString() == QLatin1String("pattern")) {
+                hasDirectoryPattern = true;
+                break;
+            }
+        }
+    }
+    if (!hasDirectoryPattern) {
+        if (!query.exec(QStringLiteral("ALTER TABLE directories ADD COLUMN pattern TEXT")))
+            qDebug() << "Error adding directories.pattern column:" << query.lastError().text();
     }
 
     // Create singers table (persisted rotation list)
@@ -662,21 +693,33 @@ QVariantList DatabaseManager::getSongsByTitle(const QString &title)
     return executeQuery(query);
 }
 
-bool DatabaseManager::addDirectory(const QString &directoryPath)
+bool DatabaseManager::addDirectory(const QString &directoryPath, const QString &pattern)
 {
     QDir dir(directoryPath);
     if (!dir.exists())
         return false;
 
     const QString absPath = QDir::cleanPath(dir.absolutePath());
+    const QString effectivePattern = pattern.trimmed().isEmpty()
+                                         ? QStringLiteral("{Artist} - {Title}")
+                                         : pattern.trimmed();
 
     QSqlQuery insertDir(m_db);
-    insertDir.prepare(QStringLiteral("INSERT OR IGNORE INTO directories (path) VALUES (?)"));
+    insertDir.prepare(QStringLiteral("INSERT OR IGNORE INTO directories (path, pattern) VALUES (?, ?)"));
     insertDir.addBindValue(absPath);
+    insertDir.addBindValue(effectivePattern);
     if (!insertDir.exec()) {
         qDebug() << "Error adding directory:" << insertDir.lastError().text();
         return false;
     }
+
+    // Re-adding a folder under a different pattern should take effect, so the
+    // stored pattern is overwritten rather than left as it was.
+    QSqlQuery updatePattern(m_db);
+    updatePattern.prepare(QStringLiteral("UPDATE directories SET pattern = ? WHERE path = ?"));
+    updatePattern.addBindValue(effectivePattern);
+    updatePattern.addBindValue(absPath);
+    updatePattern.exec();
 
     const int dirId = directoryIdForPath(m_db, absPath);
     if (dirId < 0) {
@@ -687,12 +730,13 @@ bool DatabaseManager::addDirectory(const QString &directoryPath)
     const QHash<QString, int> knownDurations = knownDurationsFor(m_db, dirId);
 
     FolderScanner scanner;
-    const QVector<ParsedSong> found = scanner.scanDirectory(absPath);
+    const QVector<ParsedSong> found = scanner.scanDirectory(absPath, effectivePattern);
 
     // The measuring is handed off; the rows land when it reports back.
     startScan(karaokeFilesFrom(found, knownDurations), QStringLiteral("songs"), dirId, false);
 
-    qDebug() << "Indexing directory:" << absPath << "candidates:" << found.size();
+    qDebug() << "Indexing directory:" << absPath << "pattern:" << effectivePattern
+             << "candidates:" << found.size();
     return true;
 }
 
@@ -733,6 +777,9 @@ void DatabaseManager::rescanDirectory(const QString &directoryPath)
     if (dirId < 0)
         return;
 
+    // The pattern the folder was added with is what it is re-indexed with.
+    const QString pattern = patternForDirectory(m_db, dirId);
+
     // Remember what we already know before those rows are replaced, so the
     // rescan only has to measure genuinely new files.
     const QHash<QString, int> knownDurations = knownDurationsFor(m_db, dirId);
@@ -747,11 +794,37 @@ void DatabaseManager::rescanDirectory(const QString &directoryPath)
     }
 
     FolderScanner scanner;
-    const QVector<ParsedSong> found = scanner.scanDirectory(absPath);
+    const QVector<ParsedSong> found = scanner.scanDirectory(absPath, pattern);
 
     startScan(karaokeFilesFrom(found, knownDurations), QStringLiteral("songs"), dirId, false);
 
-    qDebug() << "Rescanning directory:" << absPath << "candidates:" << found.size();
+    qDebug() << "Rescanning directory:" << absPath << "pattern:" << pattern
+             << "candidates:" << found.size();
+}
+
+bool DatabaseManager::setDirectoryPattern(const QString &directoryPath, const QString &pattern)
+{
+    const QString absPath = QDir::cleanPath(QDir(directoryPath).absolutePath());
+    const int dirId = directoryIdForPath(m_db, absPath);
+    if (dirId < 0)
+        return false;
+
+    const QString effectivePattern = pattern.trimmed().isEmpty()
+                                         ? QStringLiteral("{Artist} - {Title}")
+                                         : pattern.trimmed();
+
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("UPDATE directories SET pattern = ? WHERE id = ?"));
+    query.addBindValue(effectivePattern);
+    query.addBindValue(dirId);
+    if (!query.exec()) {
+        qDebug() << "Error setting directory pattern:" << query.lastError().text();
+        return false;
+    }
+
+    // Re-index straight away so the new split is visible without a second click.
+    rescanDirectory(absPath);
+    return true;
 }
 
 // --- Background music (Phase 7) --------------------------------------------
