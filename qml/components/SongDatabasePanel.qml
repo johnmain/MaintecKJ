@@ -42,35 +42,61 @@ Pane {
         return mins + ":" + (secs < 10 ? "0" : "") + secs
     }
 
-    function selectedSong() {
-        if (songList.currentIndex < 0)
-            return null
-        return songDatabaseModel.get(songList.currentIndex)
+    // Rows the actions act on: the multi-selection, else the current row.
+    function targetRows() {
+        var rows = songList.selectedRows()
+        if (rows.length === 0 && songList.currentIndex >= 0)
+            rows = [songList.currentIndex]
+        return rows
     }
 
-    function selectedSongIsDeleted() {
-        var song = selectedSong()
-        return song ? song.isDeleted === true : false
+    function liveSelectionIds() {
+        var ids = []
+        var rows = targetRows()
+        for (var i = 0; i < rows.length; ++i) {
+            var song = songDatabaseModel.get(rows[i])
+            if (song && song.isDeleted !== true)
+                ids.push(song.id)
+        }
+        return ids
     }
 
-    function addRowToQueue(row) {
-        if (row < 0)
-            return
-        var song = songDatabaseModel.get(row)
-        if (!song)
+    function deletedSelectionIds() {
+        var ids = []
+        var rows = targetRows()
+        for (var i = 0; i < rows.length; ++i) {
+            var song = songDatabaseModel.get(rows[i])
+            if (song && song.isDeleted === true)
+                ids.push(song.id)
+        }
+        return ids
+    }
+
+    function addRowsToQueue(rows) {
+        if (!rows || rows.length === 0)
             return
         if (!songQueueModel.selectedSingerName || songQueueModel.selectedSingerName.length === 0) {
             noSingerDialog.open()
             return
         }
         var singer = songQueueModel.selectedSingerName
-        songQueueModel.addSong(singer, song.title, song.artist,
-                               song.filePath, Number(song.duration), song.source || "")
+        for (var i = 0; i < rows.length; ++i) {
+            var song = songDatabaseModel.get(rows[i])
+            if (!song)
+                continue
+            songQueueModel.addSong(singer, song.title, song.artist,
+                                   song.filePath, Number(song.duration), song.source || "")
+        }
 
         // A singer who had run out of songs is back in the rotation.
         var idx = singerModel.indexOfName(singer)
         if (idx >= 0 && singerModel.statusAt(idx) !== "Active")
             singerModel.setStatus(idx, "Active")
+    }
+
+    function addRowToQueue(row) {
+        if (row >= 0)
+            addRowsToQueue([row])
     }
 
     Dialog {
@@ -79,18 +105,20 @@ Pane {
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
 
+        property var songIds: []
         property string songTitle: ""
-        property int songId: -1
 
         Label {
-            text: "Move \"" + deleteDialog.songTitle + "\" to deleted songs?\n\nThe file stays on disk and will not be re-added on rescan. Tick \"Show deleted\" to restore it."
+            text: deleteDialog.songIds.length === 1
+                  ? "Move \"" + deleteDialog.songTitle + "\" to deleted songs?\n\nThe file stays on disk and will not be re-added on rescan. Tick \"Show deleted\" to restore it."
+                  : "Move " + deleteDialog.songIds.length + " songs to deleted songs?\n\nThe files stay on disk and will not be re-added on rescan. Tick \"Show deleted\" to restore them."
             wrapMode: Text.WordWrap
             width: 320
         }
 
         onAccepted: {
-            if (deleteDialog.songId >= 0)
-                songDatabaseModel.removeSong(deleteDialog.songId)
+            for (var i = 0; i < deleteDialog.songIds.length; ++i)
+                songDatabaseModel.removeSong(deleteDialog.songIds[i])
         }
     }
 
@@ -100,18 +128,20 @@ Pane {
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
 
+        property var songIds: []
         property string songTitle: ""
-        property int songId: -1
 
         Label {
-            text: "Permanently remove \"" + purgeDialog.songTitle + "\" from the database?\n\nThis cannot be undone. The file on disk is not affected."
+            text: purgeDialog.songIds.length === 1
+                  ? "Permanently remove \"" + purgeDialog.songTitle + "\" from the database?\n\nThis cannot be undone. The file on disk is not affected."
+                  : "Permanently remove " + purgeDialog.songIds.length + " songs from the database?\n\nThis cannot be undone. The files on disk are not affected."
             wrapMode: Text.WordWrap
             width: 320
         }
 
         onAccepted: {
-            if (purgeDialog.songId >= 0)
-                songDatabaseModel.purgeSong(purgeDialog.songId)
+            for (var i = 0; i < purgeDialog.songIds.length; ++i)
+                songDatabaseModel.purgeSong(purgeDialog.songIds[i])
         }
     }
 
@@ -242,37 +272,43 @@ Pane {
             spacing: 8
 
             Button {
-                text: "Add to Queue"
-                enabled: songList.currentIndex >= 0
-                onClicked: addRowToQueue(songList.currentIndex)
+                text: databasePanel.targetRows().length > 1
+                      ? ("Add " + databasePanel.targetRows().length + " to Queue")
+                      : "Add to Queue"
+                enabled: databasePanel.targetRows().length > 0
+                onClicked: addRowsToQueue(databasePanel.targetRows())
             }
 
             Button {
-                text: selectedSongIsDeleted() ? "Delete Permanently" : "Delete"
-                enabled: songList.currentIndex >= 0
+                // A selection of nothing but deleted songs is a permanent purge;
+                // otherwise the live ones are moved to the deleted list.
+                text: (databasePanel.liveSelectionIds().length === 0
+                       && databasePanel.deletedSelectionIds().length > 0)
+                      ? "Delete Permanently" : "Delete"
+                enabled: databasePanel.targetRows().length > 0
                 onClicked: {
-                    var song = selectedSong()
-                    if (!song)
-                        return
-                    if (song.isDeleted) {
-                        purgeDialog.songTitle = song.title || song.artist || "song"
-                        purgeDialog.songId = song.id
-                        purgeDialog.open()
-                    } else {
-                        deleteDialog.songTitle = song.title || song.artist || "song"
-                        deleteDialog.songId = song.id
+                    var live = databasePanel.liveSelectionIds()
+                    var rows = databasePanel.targetRows()
+                    var single = rows.length === 1 ? songDatabaseModel.get(rows[0]) : null
+                    if (live.length > 0) {
+                        deleteDialog.songIds = live
+                        deleteDialog.songTitle = single ? (single.title || single.artist || "song") : "song"
                         deleteDialog.open()
+                    } else {
+                        purgeDialog.songIds = databasePanel.deletedSelectionIds()
+                        purgeDialog.songTitle = single ? (single.title || single.artist || "song") : "song"
+                        purgeDialog.open()
                     }
                 }
             }
 
             Button {
                 text: "Undelete"
-                enabled: songList.currentIndex >= 0 && selectedSongIsDeleted()
+                enabled: databasePanel.deletedSelectionIds().length > 0
                 onClicked: {
-                    var song = selectedSong()
-                    if (song)
-                        songDatabaseModel.restoreSong(song.id)
+                    var ids = databasePanel.deletedSelectionIds()
+                    for (var i = 0; i < ids.length; ++i)
+                        songDatabaseModel.restoreSong(ids[i])
                 }
             }
 
@@ -363,14 +399,82 @@ Pane {
             clip: true
             model: songDatabaseModel
 
+            // Multi-selection (index -> true), same shape as the singer queue.
+            property var selectedIndices: ({})
+            property int anchorIndex: -1
+
+            function isSelected(i) {
+                return selectedIndices[i] === true
+            }
+
+            function selectOnly(i) {
+                var m = ({})
+                m[i] = true
+                selectedIndices = m
+            }
+
+            function toggleIndex(i) {
+                var m = ({})
+                for (var k in selectedIndices)
+                    m[k] = selectedIndices[k]
+                if (m[i])
+                    delete m[i]
+                else
+                    m[i] = true
+                selectedIndices = m
+                anchorIndex = i
+            }
+
+            function selectRange(from, to) {
+                var m = ({})
+                var a = Math.min(from, to)
+                var b = Math.max(from, to)
+                for (var i = a; i <= b; ++i)
+                    m[i] = true
+                selectedIndices = m
+            }
+
+            function selectAll() {
+                var m = ({})
+                for (var i = 0; i < songList.count; ++i)
+                    m[i] = true
+                selectedIndices = m
+                anchorIndex = songList.count > 0 ? 0 : -1
+            }
+
+            function selectedRows() {
+                var rows = []
+                for (var k in selectedIndices)
+                    if (selectedIndices[k])
+                        rows.push(Number(k))
+                rows.sort(function(a, b) { return a - b })
+                return rows
+            }
+
+            function clearSelection() {
+                selectedIndices = ({})
+            }
+
+            // Ctrl+A selects every listed song for bulk queueing/deletion. Scoped
+            // to the list's focus so it never steals Ctrl+A from the search field.
+            Shortcut {
+                sequence: StandardKey.SelectAll
+                enabled: songList.activeFocus
+                onActivated: songList.selectAll()
+            }
+
             delegate: ItemDelegate {
                 id: songDelegate
                 width: songList.width
 
                 background: Rectangle {
-                    color: ListView.isCurrentItem ? "#DCEBFA"
-                           : (songDelegate.hovered ? databasePanel.stripeHoverColor
-                              : (index % 2 === 1 ? databasePanel.stripeColor : "transparent"))
+                    color: songList.isSelected(index)
+                           ? Qt.rgba(databasePanel.palette.highlight.r,
+                                     databasePanel.palette.highlight.g,
+                                     databasePanel.palette.highlight.b, 0.45)
+                           : (songList.currentIndex === index ? "#DCEBFA"
+                              : (songMouse.containsMouse ? databasePanel.stripeHoverColor
+                                 : (index % 2 === 1 ? databasePanel.stripeColor : "transparent")))
                     radius: 3
                 }
 
@@ -410,8 +514,28 @@ Pane {
                     }
                 }
 
-                onClicked: songList.currentIndex = index
-                onDoubleClicked: addRowToQueue(index)
+                MouseArea {
+                    id: songMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton
+
+                    onClicked: function(mouse) {
+                        // The list takes focus so Ctrl+A targets it, not the search box.
+                        songList.forceActiveFocus()
+                        if (mouse.modifiers & Qt.ControlModifier) {
+                            songList.toggleIndex(index)
+                        } else if ((mouse.modifiers & Qt.ShiftModifier) && songList.anchorIndex >= 0) {
+                            songList.selectRange(songList.anchorIndex, index)
+                        } else {
+                            songList.selectOnly(index)
+                            songList.anchorIndex = index
+                            songList.currentIndex = index
+                        }
+                    }
+
+                    onDoubleClicked: addRowToQueue(index)
+                }
             }
 
             ScrollBar.vertical: ScrollBar { }

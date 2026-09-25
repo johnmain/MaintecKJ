@@ -54,6 +54,15 @@ Pane {
         }
     }
 
+    // Any refresh (filter, rescan) resets the rows, so an index-keyed selection
+    // would otherwise point at the wrong songs afterwards.
+    Connections {
+        target: backgroundSongModel
+        function onModelReset() {
+            bgSongList.clearSelection()
+        }
+    }
+
     function formatDuration(seconds) {
         var value = Number(seconds)
         if (!value || value <= 0)
@@ -61,6 +70,34 @@ Pane {
         var mins = Math.floor(value / 60)
         var secs = value % 60
         return mins + ":" + (secs < 10 ? "0" : "") + secs
+    }
+
+    // Rows the actions act on: the multi-selection, else the current row.
+    function targetRows() {
+        var rows = bgSongList.selectedRows()
+        if (rows.length === 0 && bgSongList.currentIndex >= 0)
+            rows = [bgSongList.currentIndex]
+        return rows
+    }
+
+    function addRowsToPlaylist(rows) {
+        if (!rows || rows.length === 0)
+            return
+        var added = 0
+        for (var i = 0; i < rows.length; ++i) {
+            var song = backgroundSongModel.get(rows[i])
+            if (!song)
+                continue
+            backgroundPlaylistModel.addSong(song.artist, song.title,
+                                             song.filePath, Number(song.duration),
+                                             song.source || "")
+            ++added
+        }
+        bgLibraryPanel.statusText = added === 0
+            ? "Nothing to add."
+            : (added === 1
+               ? "Added 1 song to the playlist."
+               : ("Added " + added + " songs to the playlist."))
     }
 
     FolderDialog {
@@ -94,6 +131,15 @@ Pane {
                 placeholderText: "Search artists, titles..."
                 Layout.fillWidth: true
                 onTextChanged: backgroundSongModel.setFilter(text)
+            }
+
+            // Adds the multi-selection (or the current row) to the playlist.
+            Button {
+                text: bgLibraryPanel.targetRows().length > 1
+                      ? ("Add " + bgLibraryPanel.targetRows().length + " to Playlist")
+                      : "Add to Playlist"
+                enabled: bgLibraryPanel.targetRows().length > 0
+                onClicked: bgLibraryPanel.addRowsToPlaylist(bgLibraryPanel.targetRows())
             }
 
             // Everything in the background library, once. Pressing it again only
@@ -179,6 +225,70 @@ Pane {
             clip: true
             model: backgroundSongModel
 
+            // Multi-selection (index -> true), same shape as the singer queue.
+            property var selectedIndices: ({})
+            property int anchorIndex: -1
+
+            function isSelected(i) {
+                return selectedIndices[i] === true
+            }
+
+            function selectOnly(i) {
+                var m = ({})
+                m[i] = true
+                selectedIndices = m
+            }
+
+            function toggleIndex(i) {
+                var m = ({})
+                for (var k in selectedIndices)
+                    m[k] = selectedIndices[k]
+                if (m[i])
+                    delete m[i]
+                else
+                    m[i] = true
+                selectedIndices = m
+                anchorIndex = i
+            }
+
+            function selectRange(from, to) {
+                var m = ({})
+                var a = Math.min(from, to)
+                var b = Math.max(from, to)
+                for (var i = a; i <= b; ++i)
+                    m[i] = true
+                selectedIndices = m
+            }
+
+            function selectAll() {
+                var m = ({})
+                for (var i = 0; i < bgSongList.count; ++i)
+                    m[i] = true
+                selectedIndices = m
+                anchorIndex = bgSongList.count > 0 ? 0 : -1
+            }
+
+            function selectedRows() {
+                var rows = []
+                for (var k in selectedIndices)
+                    if (selectedIndices[k])
+                        rows.push(Number(k))
+                rows.sort(function(a, b) { return a - b })
+                return rows
+            }
+
+            function clearSelection() {
+                selectedIndices = ({})
+            }
+
+            // Ctrl+A selects every listed song for bulk playlist additions. Scoped
+            // to the list's focus so it never steals Ctrl+A from the search field.
+            Shortcut {
+                sequence: StandardKey.SelectAll
+                enabled: bgSongList.activeFocus
+                onActivated: bgSongList.selectAll()
+            }
+
             delegate: ItemDelegate {
                 id: bgDelegate
                 width: bgSongList.width
@@ -235,9 +345,13 @@ Pane {
                 }
 
                 background: Rectangle {
-                    color: bgDragArea.containsMouse
-                           ? bgLibraryPanel.stripeHoverColor
-                           : (index % 2 === 1 ? bgLibraryPanel.stripeColor : "transparent")
+                    color: bgSongList.isSelected(index)
+                           ? Qt.rgba(bgLibraryPanel.palette.highlight.r,
+                                     bgLibraryPanel.palette.highlight.g,
+                                     bgLibraryPanel.palette.highlight.b, 0.45)
+                           : (bgDragArea.containsMouse
+                              ? bgLibraryPanel.stripeHoverColor
+                              : (index % 2 === 1 ? bgLibraryPanel.stripeColor : "transparent"))
                     radius: 3
                 }
 
@@ -248,6 +362,20 @@ Pane {
                     drag.target: bgDelegate
                     drag.axis: Drag.YAxis
                     drag.threshold: 8
+
+                    onClicked: function(mouse) {
+                        // The list takes focus so Ctrl+A targets it, not the search box.
+                        bgSongList.forceActiveFocus()
+                        if (mouse.modifiers & Qt.ControlModifier) {
+                            bgSongList.toggleIndex(index)
+                        } else if ((mouse.modifiers & Qt.ShiftModifier) && bgSongList.anchorIndex >= 0) {
+                            bgSongList.selectRange(bgSongList.anchorIndex, index)
+                        } else {
+                            bgSongList.selectOnly(index)
+                            bgSongList.anchorIndex = index
+                            bgSongList.currentIndex = index
+                        }
+                    }
 
                     onPressed: {
                         bgDelegate.startX = bgDelegate.x

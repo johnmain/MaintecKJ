@@ -175,6 +175,14 @@ Pane {
                 selectedIndices = m
             }
 
+            function selectAll() {
+                var m = ({})
+                for (var i = 0; i < queueList.count; ++i)
+                    m[i] = true
+                selectedIndices = m
+                anchorIndex = queueList.count > 0 ? 0 : -1
+            }
+
             function selectedRows() {
                 var rows = []
                 for (var k in selectedIndices)
@@ -234,6 +242,15 @@ Pane {
                 for (var i = 0; i < rows.length; ++i)
                     songQueueModel.setKeyShift(rows[i], 0)
                 syncDeckKey(rows)
+            }
+
+            // Ctrl+A selects the whole queue so bulk actions (mark all unplayed,
+            // remove, key change) apply in one go. Scoped to the list's focus so
+            // it never steals Ctrl+A from a text field elsewhere.
+            Shortcut {
+                sequence: StandardKey.SelectAll
+                enabled: queueList.activeFocus
+                onActivated: queueList.selectAll()
             }
 
             delegate: ItemDelegate {
@@ -311,6 +328,9 @@ Pane {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
 
                     onClicked: function(mouse) {
+                        // Give the list focus so Ctrl+A selects the queue rather
+                        // than reaching whatever text field was focused before.
+                        queueList.forceActiveFocus()
                         if (mouse.button === Qt.RightButton) {
                             if (!queueList.isSelected(index))
                                 queueList.selectOnly(index)
@@ -355,7 +375,7 @@ Pane {
             Label {
                 text: queueList.selectedRows().length > 0
                       ? queueList.selectedRows().length + " selected"
-                      : "Ctrl/Shift-click to multi-select \u00B7 right-click for menu"
+                      : "Ctrl/Shift-click, Ctrl+A for all \u00B7 right-click for menu"
                 font.pixelSize: 10
                 opacity: 0.7
                 Layout.fillWidth: true
