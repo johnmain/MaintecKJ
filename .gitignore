@@ -4,3 +4,7 @@ build-release/
 .cache/
 dist/
 *.user
+
+# Local test media and fixtures: the sample karaoke tracks are large and
+# copyrighted, so they stay out of the repository.
+tests/
