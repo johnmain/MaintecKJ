@@ -44,6 +44,25 @@ Pane {
         return mins + ":" + (secs < 10 ? "0" : "") + secs
     }
 
+    // Stop and Pause both leave mediaPlayer.playing false, so `playing` alone
+    // cannot tell them apart. RubberBandAudioEngine::stop() resets the playhead
+    // and re-reports the position; pause() leaves it untouched. A position
+    // update arriving in the same turn as the drop therefore means Stop, which
+    // is why the decision is deferred until the event loop has settled.
+    property bool stopDetected: false
+
+    Timer {
+        id: stopSettle
+        interval: 0
+        onTriggered: {
+            if (deckPanel.stopDetected) {
+                cdgRenderer.unload()
+                secondaryCdg.unload()
+                deckPanel.stopDetected = false
+            }
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 12
@@ -82,22 +101,55 @@ Pane {
             }
         }
 
-        // Keep CDG graphics locked to the audio player position.
+        // Keep CDG graphics locked to the audio player position. Both the mini
+        // preview and the secondary display follow the deck from here.
         Connections {
             target: mediaPlayer
+
             function onSourceChanged() {
-                cdgRenderer.setSource(deckPanel.companionCdg(mediaPlayer.filePath))
+                var cdg = deckPanel.companionCdg(mediaPlayer.filePath)
+                cdgRenderer.setSource(cdg)
                 cdgRenderer.reset()
+                secondaryCdg.setSource(cdg)
+                secondaryCdg.reset()
             }
+
             function onPlayingChanged() {
-                if (mediaPlayer.playing)
+                if (mediaPlayer.playing) {
+                    // A finished song unloads the renderers, so a replay needs
+                    // their graphics put back before the clock resumes.
+                    var cdg = deckPanel.companionCdg(mediaPlayer.filePath)
+                    if (!cdgRenderer.loaded)
+                        cdgRenderer.setSource(cdg)
+                    if (!secondaryCdg.loaded)
+                        secondaryCdg.setSource(cdg)
                     cdgRenderer.start()
-                else
+                    secondaryCdg.start()
+                } else {
+                    // Maybe a pause, maybe a stop; stopSettle decides once the
+                    // engine has had its say. Either way the frame stays for now,
+                    // so a pause keeps showing it and a resume just continues.
+                    deckPanel.stopDetected = false
                     cdgRenderer.stop()
+                    secondaryCdg.stop()
+                    stopSettle.restart()
+                }
             }
+
             function onPositionChanged() {
-                if (mediaPlayer.playing)
+                if (mediaPlayer.playing) {
                     cdgRenderer.syncToPosition(mediaPlayer.position)
+                    secondaryCdg.syncToPosition(mediaPlayer.position)
+                } else {
+                    // Only stop() moves the playhead while not playing.
+                    deckPanel.stopDetected = true
+                }
+            }
+
+            // A finished song clears the display so the idle background shows.
+            function onSongFinished() {
+                cdgRenderer.unload()
+                secondaryCdg.unload()
             }
         }
 
@@ -410,24 +462,6 @@ Pane {
             color: "white"
             opacity: 0.5
             font.pixelSize: 12
-        }
-
-        Connections {
-            target: mediaPlayer
-            function onSourceChanged() {
-                secondaryCdg.setSource(deckPanel.companionCdg(mediaPlayer.filePath))
-                secondaryCdg.reset()
-            }
-            function onPlayingChanged() {
-                if (mediaPlayer.playing)
-                    secondaryCdg.start()
-                else
-                    secondaryCdg.stop()
-            }
-            function onPositionChanged() {
-                if (mediaPlayer.playing)
-                    secondaryCdg.syncToPosition(mediaPlayer.position)
-            }
         }
 
         Shortcut {

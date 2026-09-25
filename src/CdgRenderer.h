@@ -42,6 +42,7 @@ public slots:
     Q_INVOKABLE void syncToPosition(int ms);
     Q_INVOKABLE void start();
     Q_INVOKABLE void stop();
+    Q_INVOKABLE void unload();
 
 private slots:
     void onTick();

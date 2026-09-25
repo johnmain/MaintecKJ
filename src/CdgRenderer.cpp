@@ -6,7 +6,11 @@
 #include <QtGlobal>
 
 namespace {
-constexpr int TileColumns = 48;   // 48 * 6px = 288px active width
+// The CD+G tile grid can address columns 0-49 (the last one starts at x=294,
+// leaving the right 6px border), matching FFmpeg's cdgraphics decoder. Capping
+// this at 48 dropped the column a wide glyph's right half lands in, which cut
+// the last character of a long line roughly in half.
+constexpr int TileColumns = 50;   // 50 * 6px = 300px; x0+TileWidth check trims the rest
 constexpr int TileRows = 18;      // 18 * 12px = 216px active height
 constexpr int TileWidth = 6;
 constexpr int TileHeight = 12;
@@ -92,6 +96,7 @@ void CdgRenderer::drawTile(const unsigned char *data, bool xorMode)
 {
     const int color0 = data[0] & 0x0f;
     const int color1 = data[1] & 0x0f;
+
     const int row = data[2] & 0x1f;
     const int column = data[3] & 0x3f;
 
@@ -287,6 +292,29 @@ void CdgRenderer::stop()
     m_running = false;
     m_timer.stop();
     emit runningChanged();
+}
+
+void CdgRenderer::unload()
+{
+    stop();
+
+    const bool wasLoaded = m_packetCount > 0;
+    m_raw.clear();
+    m_packetCount = 0;
+    m_nextPacket = 0;
+    m_positionMs = 0;
+    m_source.clear();
+
+    for (int i = 0; i < 16; ++i)
+        m_colorTable[i] = qRgb(0, 0, 0);
+
+    clearScreen(0);
+
+    if (wasLoaded) {
+        emit sourceChanged();
+        emit positionChanged();
+    }
+    update();
 }
 
 void CdgRenderer::onTick()
