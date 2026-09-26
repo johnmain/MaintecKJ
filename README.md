@@ -262,6 +262,11 @@ Also standing on:
 
 ## License
 
-No license has been chosen for this project yet, so all rights are reserved by
-default. If you intend to use or contribute to it, open an issue and we'll sort
-one out.
+MaintecKJ is released under the **GNU General Public License v3.0**. See
+[LICENSE](LICENSE) for the full text.
+
+Copyright (C) 2026 John Main.
+
+GPL-3.0 is the licence this project has to use in practice: it links
+[Rubber Band](https://breakfastquay.com/rubberband/) (GPL-2.0-or-later) and ships
+Qt Multimedia with GPL FFmpeg, so a distributed binary must be GPL-compatible.
