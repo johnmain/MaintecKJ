@@ -103,6 +103,9 @@ install(DIRECTORY qml/
 install(FILES packaging/README.md DESTINATION .)
 install(PROGRAMS packaging/run.sh DESTINATION .)
 
+# The licence and the third-party notices travel with the binary.
+install(FILES LICENSE THIRD-PARTY.md DESTINATION .)
+
 # The deploy step only copies the platform plugins it can detect as needed, which
 # here is xcb. The offscreen plugin is added explicitly: it costs half a megabyte
 # and is what allows the packaged app to be smoke-tested on a machine with no

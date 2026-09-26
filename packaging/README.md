@@ -89,3 +89,9 @@ to wherever the fader happened to be parked.
 - **Startup fails with a platform plugin error** - run it from a desktop session.
   The bundled plugins are xcb (normal desktop) and offscreen (headless testing).
 - **Songs have no duration** - install ffmpeg, then use Rescan on the folder.
+
+## License
+
+MaintecKJ is released under the GNU General Public License v3.0 - see `LICENSE`
+in this folder. The libraries bundled alongside it are listed, with their
+licenses, in `THIRD-PARTY.md`.
