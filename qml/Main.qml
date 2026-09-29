@@ -45,6 +45,7 @@ ApplicationWindow {
         property string bridgeToken: ""
         property bool autoSyncAfterExport: false
         property int pollIntervalMs: 5000
+        property bool accepting: false
     }
     readonly property QtObject portalSettings: portalSettingsStore
 
@@ -103,6 +104,14 @@ ApplicationWindow {
                             modeTabs.currentIndex = wanted
                     }
                 }
+            }
+
+            Button {
+                text: portalSettingsStore.accepting
+                      ? "\uD83C\uDFA4  Accepting requests"
+                      : "\uD83C\uDFA4  Not accepting"
+                highlighted: portalSettingsStore.accepting
+                onClicked: portalSettingsStore.accepting = !portalSettingsStore.accepting
             }
 
             Button {

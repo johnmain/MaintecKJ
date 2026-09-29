@@ -158,6 +158,7 @@ secret, `bridgeToken`.
 | `portalUrl`       | `""`    | Portal base URL, e.g. `https://karaoke.example.org`       |
 | `bridgeToken`     | `""`    | Shared secret; sent as `Authorization: Bearer <token>`    |
 | `pollIntervalMs`  | `5000`  | How often the host polls for new requests                 |
+| `accepting`       | `false` | Toggle: accept song requests (reported via the poll)      |
 | `autoSyncCatalog` | `false` | Push the song list after library changes (debounced)      |
 
 `MAINTECKJ_PORTAL_TOKEN` may override `bridgeToken` for testing. For LAN testing
@@ -196,6 +197,9 @@ should use `https://`.
 - `updates` carries singer-requested played/unplayed toggles. Apply each to the
   queue row whose `portal_request_id` matches, then report the outcome back
   (§10.4) — the portal clears the pending toggle once it agrees.
+- `X-Accepting: true|false` on the poll carries the app's "Accepting requests"
+  toggle. The poll is the heartbeat; the portal exposes the result publicly at
+  `GET {portalUrl}/api/status` so the website can show/hide the request link.
 
 ### 10.4 Outbound calls (host → portal)
 

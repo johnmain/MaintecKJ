@@ -238,6 +238,7 @@ in sync. The full wire contract lives in `AGENT.md` §10; the portal side is the
 - [x] Each claimed request is stored **pending** and the model emits `pendingCountChanged`; never added to the rotation automatically
 - [x] `WebRequestModel` list model over `web_requests`, with a pending-count property for the badge
 - [x] Poll failures are logged and retried on the next tick; the token is never logged
+- [x] Header **Accepting requests** toggle (`Portal/accepting`); the poll sends `X-Accepting`, feeding the portal's public `GET /api/status`
 
 ### Triage & lifecycle
 - [x] Resolve local file(s) for an incoming request by trimmed, case-insensitive Artist/Title against `songs` (`DatabaseManager::findSongsByArtistTitle`), keeping every matching version with its `source`

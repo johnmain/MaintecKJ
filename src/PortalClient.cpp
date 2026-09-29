@@ -221,6 +221,7 @@ void PortalClient::pollRequests()
     const QString portalUrl =
         normalizeBaseUrl(settings.value(QStringLiteral("portalUrl")).toString());
     const QString token = settings.value(QStringLiteral("bridgeToken")).toString().trimmed();
+    const bool accepting = settings.value(QStringLiteral("accepting"), false).toBool();
     settings.endGroup();
 
     if (!enabled || portalUrl.isEmpty() || token.isEmpty())
@@ -229,6 +230,8 @@ void PortalClient::pollRequests()
     QNetworkRequest request(QUrl(portalUrl + QStringLiteral("/api/host/requests/poll")));
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + token.toUtf8());
+    // The poll doubles as the heartbeat; X-Accepting feeds the public status.
+    request.setRawHeader("X-Accepting", accepting ? "true" : "false");
     request.setTransferTimeout(kSyncTimeoutMs);
 
     m_pollBusy = true;
