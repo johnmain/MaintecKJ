@@ -254,6 +254,13 @@ in sync. The full wire contract lives in `AGENT.md` §10; the portal side is the
 - [x] Any played change on a portal-linked queue row is reported back (`portalPlayedChanged` → `PATCH` `played`/`approved`), clearing the singer's pending toggle
 - [x] Marking a queue song played — whether the host starts it (double-click) or it finishes — PATCHes `played`. A distinct `playing` state is deliberately not sent.
 
+### Queue push (host → Request DB)
+- [x] Queue panel shows an **In Request DB / Not in Request DB** badge for the selected singer, driven by `GET /api/host/singers`
+- [x] **Push to Portal** button sends the singer's queue (`PortalClient::pushSingerQueue` + `SongQueueModel::songsForSinger`), enabled only for a known singer with queued songs
+- [x] Portal fully reconciles that singer: queued songs become approved/delivered requests, active requests no longer queued are removed, `played`/`rejected` are untouched (unknown name → 404, ambiguous → 409)
+- [x] `PortalClient` mirrors the portal's `normalizeText()` so the badge and the push agree on name matching
+- [x] Singer directory refreshed on a 60 s timer and after each push
+
 ### Verification
 - [x] Build check passes (`[100%] Built target mainteckj-app`); the app launches cleanly and `qmllint` reports no QML errors in `Main.qml` / `WebRequestsPanel.qml` / `SettingsPanel.qml`
 - [x] Poll end-to-end: the desktop claims a pending request from the portal (portal marks it delivered) and stores it in `web_requests` — verified offscreen with the real portal
@@ -261,3 +268,4 @@ in sync. The full wire contract lives in `AGENT.md` §10; the portal side is the
 - [x] Retry end-to-end: with the portal's `PATCH` failing (stub), the update stays queued and is retried on the next poll (two attempts observed) — verified offscreen
 - [ ] `/tmp/portal_test.cpp` style assertions: inbound auth accept/reject, JSON parse + `202`, empty-`files` request resolves against the local library (including a multi-version case), status mapping for approved/playing/played/rejected, and the catalog body matching `SongListExporter` byte-for-byte
 - [ ] Manual end-to-end: "Sync Now" loads the library into the portal; a phone request then arrives, is triaged into the rotation, and the portal shows approved → playing → played
+- [ ] Manual end-to-end: a walk-up singer with a queue in the app shows **In Request DB** once they exist on the portal, and **Push to Portal** makes their queue appear in the portal (and removes dropped songs)

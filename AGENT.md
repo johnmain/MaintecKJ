@@ -144,6 +144,8 @@ singer phone ──HTTPS──▶ portal (NAS / Netbird)
                             ▲   │
    POST /api/host/requests/poll│  │ PATCH /api/host/requests/{id}
    POST /api/catalog/ingest    │  │
+   GET  /api/host/singers      │  │
+   POST /api/host/queue/push   │  │
                             └───┴── desktop host (polls on a timer)
 ```
 
@@ -159,7 +161,7 @@ secret, `bridgeToken`.
 | `bridgeToken`     | `""`    | Shared secret; sent as `Authorization: Bearer <token>`    |
 | `pollIntervalMs`  | `5000`  | How often the host polls for new requests                 |
 | `accepting`       | `false` | Toggle: accept song requests (reported via the poll)      |
-| `autoSyncCatalog` | `false` | Push the song list after library changes (debounced)      |
+| `autoSyncAfterExport` | `false` | Push the song list after each export (debounced)     |
 
 `MAINTECKJ_PORTAL_TOKEN` may override `bridgeToken` for testing. For LAN testing
 an `http://` URL is fine — a bare `host:port` defaults to `http://`; production
@@ -218,6 +220,11 @@ should use `https://`.
   marks a queue row played/unplayed, `PATCH` `played` / `approved`. The portal
   stores `host_played` and clears the singer's pending toggle.
 - **Health** — `GET {portalUrl}/api/health` (public) backs the "Test" button.
+- **Singer directory** — `GET {portalUrl}/api/host/singers`, response
+  `{ singers: [{ id, name, stageName }] }`. Cached in `PortalClient` (refreshed
+  on a 60 s timer and after a push) to drive the "In Request DB" indicator.
+- **Push a singer's queue** — `POST {portalUrl}/api/host/queue/push`, body
+  `{ singerName, songs: [{ title, artist, played }] }`. See §10.9.
 
 Use `QNetworkAccessManager` (async) with a request timeout. Outbound status
 updates are queued in `PortalClient` (latest wins per request) and retried on
@@ -281,14 +288,35 @@ state from the Settings tab.
 
 - `Qt6::Network` is already in `find_package` and `target_link_libraries`.
 - Classes: `PortalClient` (`QNetworkAccessManager` + poll `QTimer`;
-  `syncSongList()`, `updateRequestStatus()`, `testConnection()`),
+  `syncSongList()`, `updateRequestStatus()`, `testConnection()`,
+  `refreshSingers()`, `pushSingerQueue()`, `isSingerInPortal()`),
   `WebRequestModel` (list model over `web_requests`), plus `DatabaseManager`
   methods for the table.
 - Never log the token. Debounce catalog auto-sync so a rescan does not upload
   per song. The mandatory build check in §8 still applies after every change
   (`[100%] Built target mainteckj-app`).
 
-### 10.9 Non-goals (v1)
+### 10.9 Push a singer's queue (manual)
+
+A walk-up singer who never opened the portal, or a song the host added straight
+to a singer's queue, has no request in the Request DB. The queue panel shows an
+**In Request DB / Not in Request DB** badge for the selected singer (driven by
+the §10.4 directory) and a **Push to Portal** button, enabled only when the
+singer is known and has queued songs.
+
+`PortalClient::pushSingerQueue(singerName, songs)` sends the singer's whole
+queue (`SongQueueModel::songsForSinger`) and the portal **fully reconciles** its
+requests for that singer: each queued song becomes an `approved`, already-
+delivered request (with `host_played` set from the queue), and active requests
+whose song is no longer queued are removed. `played`/`rejected` requests are
+never touched. Unknown name → `404`, ambiguous name → `409`; the Settings status
+line shows the message and the reconcile counts. The push is manual — there is
+no automatic queue sync.
+
+Name matching is punctuation/case-insensitive on both sides; `PortalClient`
+mirrors the portal's `normalizeText()` so the badge and the push agree.
+
+### 10.10 Non-goals (v1)
 
 - The host does not authenticate singers; it trusts the bearer token.
 - No inbound HTTP listener or WebSocket: the transport is host-initiated polling

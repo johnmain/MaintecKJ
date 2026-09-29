@@ -445,6 +445,25 @@ void SongQueueModel::renameSinger(const QString &from, const QString &to)
     persist();
 }
 
+QVariantList SongQueueModel::songsForSinger(const QString &singer) const
+{
+    QVariantList songs;
+    if (singer.isEmpty())
+        return songs;
+
+    for (const SongItem &item : m_songs) {
+        if (item.singerName != singer)
+            continue;
+
+        QVariantMap row;
+        row.insert(QStringLiteral("title"), item.songTitle);
+        row.insert(QStringLiteral("artist"), item.artist);
+        row.insert(QStringLiteral("played"), item.isPlayed);
+        songs.append(row);
+    }
+    return songs;
+}
+
 void SongQueueModel::applyPortalPlayed(const QString &portalRequestId, bool played)
 {
     if (portalRequestId.isEmpty())

@@ -4,8 +4,10 @@
 #include <QList>
 #include <QObject>
 #include <QPair>
+#include <QSet>
 #include <QString>
 #include <QVariantList>
+#include <QVariantMap>
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -51,16 +53,38 @@ public:
     // Reports a triaged request's status back to the portal.
     Q_INVOKABLE void updateRequestStatus(const QString &portalRequestId, const QString &status);
 
+    // True when an app singer name matches a portal account (the Request DB
+    // indicator). Uses the cached singer directory, refreshed on a timer.
+    Q_INVOKABLE bool isSingerInPortal(const QString &singerName) const;
+
+    // Refreshes the cached portal singer directory (GET /api/host/singers).
+    Q_INVOKABLE void refreshSingers();
+
+    // Pushes one singer's whole queue to the portal, which reconciles its
+    // requests for that singer. `songs` is a list of { title, artist, played }.
+    Q_INVOKABLE void pushSingerQueue(const QString &singerName, const QVariantList &songs);
+
 signals:
     void statusChanged();
     void requestsReceived(const QVariantList &requests);
     void queueUpdatesReceived(const QVariantList &updates);
+    // The set of known portal singer names changed.
+    void singersChanged();
+    // A queue push completed; carries the portal's reconcile summary.
+    void queuePushed(const QVariantMap &result);
 
 private:
     void setBusy(bool busy);
     void setError(const QString &message);
     void setSummary(const QString &message);
     void finishSync(QNetworkReply *reply);
+
+    // Refreshes the singer directory at most once a minute, from the poll tick.
+    void maybeRefreshSingers();
+
+    // Canonical name key, mirroring the portal's normalizeText() so both sides
+    // agree on whether "Alice Cooper" and "alice  cooper" are the same singer.
+    static QString singerKey(const QString &value);
 
     // Sends queued status updates one at a time; called after a queue change and
     // on every poll tick so a failed update is retried until it lands.
@@ -81,6 +105,9 @@ private:
     QString m_lastError;
     QString m_lastSummary;
     bool m_busy = false;
+    // Normalized names (display + stage) of every portal account.
+    QSet<QString> m_portalSingerKeys;
+    qint64 m_lastSingersRefreshMs = 0;
 };
 
 #endif // PORTALCLIENT_H

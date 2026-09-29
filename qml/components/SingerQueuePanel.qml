@@ -30,6 +30,28 @@ Pane {
         return v > 0 ? "+" + v : "" + v
     }
 
+    // Whether the singer currently shown exists in the portal's Request DB.
+    property bool singerInPortal: false
+
+    function updatePortalStatus() {
+        singerInPortal = portalClient.isSingerInPortal(songQueueModel.selectedSingerName)
+    }
+
+    Connections {
+        target: portalClient
+        function onSingersChanged() { queuePanel.updatePortalStatus() }
+    }
+
+    Connections {
+        target: songQueueModel
+        function onSelectedSingerNameChanged() { queuePanel.updatePortalStatus() }
+    }
+
+    Component.onCompleted: {
+        updatePortalStatus()
+        portalClient.refreshSingers()
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 8
@@ -47,6 +69,26 @@ Pane {
                 text: queueList.count + " item(s)"
                 font.pixelSize: 11
                 opacity: 0.7
+            }
+            Label {
+                visible: songQueueModel.selectedSingerName.length > 0
+                text: queuePanel.singerInPortal ? "In Request DB" : "Not in Request DB"
+                color: queuePanel.singerInPortal ? "#4ade80" : "#fbbf24"
+                font.pixelSize: 11
+            }
+            Button {
+                visible: songQueueModel.selectedSingerName.length > 0
+                text: "Push to Portal"
+                enabled: queuePanel.singerInPortal
+                         && songQueueModel.songsForSinger(songQueueModel.selectedSingerName).length > 0
+                hoverEnabled: true
+                ToolTip.visible: hovered
+                ToolTip.text: queuePanel.singerInPortal
+                              ? "Replace this singer's portal requests with their app queue"
+                              : "Singer is not in the Request DB — they must sign in to the portal once"
+                onClicked: portalClient.pushSingerQueue(
+                               songQueueModel.selectedSingerName,
+                               songQueueModel.songsForSinger(songQueueModel.selectedSingerName))
             }
         }
 

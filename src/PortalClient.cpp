@@ -2,6 +2,7 @@
 
 #include "SongListExporter.h"
 
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -45,6 +46,7 @@ PortalClient::PortalClient(QObject *parent)
             m_pollTimer->setInterval(interval);
         pollRequests();
         drainStatusUpdates();
+        maybeRefreshSingers();
     });
     m_pollTimer->start();
 }
@@ -353,5 +355,192 @@ void PortalClient::drainStatusUpdates()
         // More to send? Keep going; a failure waits for the next poll tick.
         if (ok)
             drainStatusUpdates();
+    });
+}
+
+QString PortalClient::singerKey(const QString &value)
+{
+    // Mirrors the portal's normalizeText(): NFKD, strip combining marks, NFC,
+    // lower-case, and collapse runs of non-alphanumerics to a single space.
+    const QString decomposed = value.normalized(QString::NormalizationForm_KD);
+
+    QString stripped;
+    stripped.reserve(decomposed.size());
+    for (const QChar ch : decomposed) {
+        const ushort u = ch.unicode();
+        const bool combining = (u >= 0x0300 && u <= 0x036f) || (u >= 0x1ab0 && u <= 0x1aff)
+                               || (u >= 0x1dc0 && u <= 0x1dff);
+        if (!combining)
+            stripped.append(ch);
+    }
+
+    const QString composed = stripped.normalized(QString::NormalizationForm_C).toLower();
+
+    QString result;
+    result.reserve(composed.size());
+    bool pendingSpace = false;
+    for (const QChar ch : composed) {
+        if (ch.isLetterOrNumber()) {
+            if (pendingSpace && !result.isEmpty())
+                result.append(QLatin1Char(' '));
+            pendingSpace = false;
+            result.append(ch);
+        } else {
+            pendingSpace = true;
+        }
+    }
+    return result;
+}
+
+bool PortalClient::isSingerInPortal(const QString &singerName) const
+{
+    const QString key = singerKey(singerName);
+    return !key.isEmpty() && m_portalSingerKeys.contains(key);
+}
+
+void PortalClient::maybeRefreshSingers()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastSingersRefreshMs < 60000)
+        return;
+    m_lastSingersRefreshMs = now;
+    refreshSingers();
+}
+
+void PortalClient::refreshSingers()
+{
+    QSettings settings;
+    settings.beginGroup(QString::fromLatin1(kPortalGroup));
+    const bool enabled = settings.value(QStringLiteral("enabled"), false).toBool();
+    const QString portalUrl =
+        normalizeBaseUrl(settings.value(QStringLiteral("portalUrl")).toString());
+    const QString token = settings.value(QStringLiteral("bridgeToken")).toString().trimmed();
+    settings.endGroup();
+
+    if (!enabled || portalUrl.isEmpty() || token.isEmpty())
+        return;
+
+    QNetworkRequest request(QUrl(portalUrl + QStringLiteral("/api/host/singers")));
+    request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + token.toUtf8());
+    request.setTransferTimeout(kSyncTimeoutMs);
+
+    QNetworkReply *reply = m_network->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QByteArray body = reply->readAll();
+
+        if (reply->error() == QNetworkReply::NoError && status >= 200 && status < 300) {
+            const QJsonArray singers = QJsonDocument::fromJson(body)
+                                           .object()
+                                           .value(QStringLiteral("singers"))
+                                           .toArray();
+            QSet<QString> keys;
+            for (const QJsonValue &value : singers) {
+                const QJsonObject singer = value.toObject();
+                const QString name =
+                    singerKey(singer.value(QStringLiteral("name")).toString());
+                const QString stage =
+                    singerKey(singer.value(QStringLiteral("stageName")).toString());
+                if (!name.isEmpty())
+                    keys.insert(name);
+                if (!stage.isEmpty())
+                    keys.insert(stage);
+            }
+            if (keys != m_portalSingerKeys) {
+                m_portalSingerKeys = keys;
+                emit singersChanged();
+            }
+        }
+        reply->deleteLater();
+    });
+}
+
+void PortalClient::pushSingerQueue(const QString &singerName, const QVariantList &songs)
+{
+    const QString name = singerName.trimmed();
+    if (name.isEmpty()) {
+        setSummary(QString());
+        setError(tr("Select a singer first."));
+        return;
+    }
+
+    QSettings settings;
+    settings.beginGroup(QString::fromLatin1(kPortalGroup));
+    const bool enabled = settings.value(QStringLiteral("enabled"), false).toBool();
+    const QString portalUrl =
+        normalizeBaseUrl(settings.value(QStringLiteral("portalUrl")).toString());
+    const QString token = settings.value(QStringLiteral("bridgeToken")).toString().trimmed();
+    settings.endGroup();
+
+    if (!enabled) {
+        setSummary(QString());
+        setError(tr("The singer portal is disabled in Settings."));
+        return;
+    }
+    if (portalUrl.isEmpty() || token.isEmpty()) {
+        setSummary(QString());
+        setError(tr("Set the portal URL and bridge token in Settings first."));
+        return;
+    }
+
+    QJsonArray songArray;
+    for (const QVariant &value : songs) {
+        const QVariantMap row = value.toMap();
+        QJsonObject song;
+        song[QStringLiteral("title")] = row.value(QStringLiteral("title")).toString();
+        song[QStringLiteral("artist")] = row.value(QStringLiteral("artist")).toString();
+        song[QStringLiteral("played")] = row.value(QStringLiteral("played")).toBool();
+        songArray.append(song);
+    }
+
+    QJsonObject payload;
+    payload[QStringLiteral("singerName")] = name;
+    payload[QStringLiteral("songs")] = songArray;
+
+    QNetworkRequest request(QUrl(portalUrl + QStringLiteral("/api/host/queue/push")));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + token.toUtf8());
+    request.setTransferTimeout(kSyncTimeoutMs);
+
+    setError(QString());
+    setSummary(tr("Pushing %1 song(s) for %2…").arg(songArray.size()).arg(name));
+    setBusy(true);
+
+    QNetworkReply *reply =
+        m_network->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, name]() {
+        setBusy(false);
+
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QByteArray body = reply->readAll();
+        const QJsonObject object = QJsonDocument::fromJson(body).object();
+
+        if (status == 401) {
+            setSummary(QString());
+            setError(tr("Portal rejected the bridge token (401). The token here must match "
+                        "HOST_BRIDGE_TOKEN in the portal's .env."));
+        } else if (status == 404 || status == 409) {
+            setSummary(QString());
+            setError(object.value(QStringLiteral("message"))
+                         .toString(status == 404
+                                       ? tr("That singer is not in the Request DB.")
+                                       : tr("Several portal singers match that name.")));
+        } else if (reply->error() != QNetworkReply::NoError) {
+            setError(tr("Queue push failed: %1").arg(reply->errorString()));
+        } else if (status < 200 || status >= 300) {
+            setError(tr("Queue push failed (HTTP %1).").arg(status));
+        } else {
+            setError(QString());
+            setSummary(tr("Pushed %1 song(s) for %2: %3 added, %4 updated, %5 removed.")
+                           .arg(object.value(QStringLiteral("received")).toInt())
+                           .arg(name)
+                           .arg(object.value(QStringLiteral("created")).toInt())
+                           .arg(object.value(QStringLiteral("updated")).toInt())
+                           .arg(object.value(QStringLiteral("removed")).toInt()));
+            emit queuePushed(object.toVariantMap());
+            refreshSingers();
+        }
+
+        reply->deleteLater();
     });
 }

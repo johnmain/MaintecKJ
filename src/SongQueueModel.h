@@ -5,6 +5,8 @@
 #include <QList>
 #include <QString>
 #include <QUuid>
+#include <QVariantList>
+#include <QVariantMap>
 
 class DatabaseManager;
 
@@ -71,6 +73,10 @@ public:
     // Renames a singer across their queue rows. Used when a web request is
     // assigned to an existing singer and adopts the portal name.
     Q_INVOKABLE void renameSinger(const QString &from, const QString &to);
+
+    // One singer's queued songs as { title, artist, played } maps, in queue
+    // order. Used to push that singer's queue to the portal.
+    Q_INVOKABLE QVariantList songsForSinger(const QString &singer) const;
 
     // Applies a played/unplayed toggle the singer made on the portal. Rows that
     // carry the portal request id are updated; a signal reports it back.
