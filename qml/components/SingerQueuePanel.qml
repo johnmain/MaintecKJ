@@ -40,6 +40,11 @@ Pane {
     Connections {
         target: portalClient
         function onSingersChanged() { queuePanel.updatePortalStatus() }
+        function onQueuePreviewed(summary) {
+            pushConfirm.summary = summary
+            pushConfirm.singerName = songQueueModel.selectedSingerName
+            pushConfirm.open()
+        }
     }
 
     Connections {
@@ -86,7 +91,7 @@ Pane {
                 ToolTip.text: queuePanel.singerInPortal
                               ? "Replace this singer's portal requests with their app queue"
                               : "Singer is not in the Request DB — they must sign in to the portal once"
-                onClicked: portalClient.pushSingerQueue(
+                onClicked: portalClient.previewSingerQueue(
                                songQueueModel.selectedSingerName,
                                songQueueModel.songsForSinger(songQueueModel.selectedSingerName))
             }
@@ -507,6 +512,54 @@ Pane {
         MenuItem {
             text: "Remove Selected"
             onTriggered: queueList.removeSelection()
+        }
+    }
+
+    // Confirm a queue push after the portal's dry run reports the changes.
+    Dialog {
+        id: pushConfirm
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        title: "Push queue to the Request DB"
+        property var summary: ({})
+        property string singerName: ""
+        readonly property int willAdd: summary.created !== undefined ? summary.created : 0
+        readonly property int willUpdate: summary.updated !== undefined ? summary.updated : 0
+        readonly property int willRemove: summary.removed !== undefined ? summary.removed : 0
+
+        onAccepted: portalClient.pushSingerQueue(
+                        pushConfirm.singerName,
+                        songQueueModel.songsForSinger(pushConfirm.singerName))
+
+        contentItem: ColumnLayout {
+            spacing: 8
+            Label {
+                text: "For " + pushConfirm.singerName
+                font.bold: true
+            }
+            Label {
+                text: pushConfirm.willAdd + " added, " + pushConfirm.willUpdate + " updated, "
+                      + pushConfirm.willRemove + " removed"
+            }
+            Label {
+                visible: pushConfirm.willRemove > 0
+                text: "Songs no longer in the app queue will be removed from the portal "
+                      + "(played songs are kept)."
+                color: "#fbbf24"
+                wrapMode: Text.WordWrap
+                Layout.maximumWidth: 360
+            }
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                text: "Push to Portal"
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+            Button {
+                text: "Cancel"
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
         }
     }
 }

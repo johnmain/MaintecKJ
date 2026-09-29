@@ -457,6 +457,16 @@ void PortalClient::refreshSingers()
 
 void PortalClient::pushSingerQueue(const QString &singerName, const QVariantList &songs)
 {
+    sendQueuePush(singerName, songs, false);
+}
+
+void PortalClient::previewSingerQueue(const QString &singerName, const QVariantList &songs)
+{
+    sendQueuePush(singerName, songs, true);
+}
+
+void PortalClient::sendQueuePush(const QString &singerName, const QVariantList &songs, bool dryRun)
+{
     const QString name = singerName.trimmed();
     if (name.isEmpty()) {
         setSummary(QString());
@@ -496,6 +506,8 @@ void PortalClient::pushSingerQueue(const QString &singerName, const QVariantList
     QJsonObject payload;
     payload[QStringLiteral("singerName")] = name;
     payload[QStringLiteral("songs")] = songArray;
+    if (dryRun)
+        payload[QStringLiteral("dryRun")] = true;
 
     QNetworkRequest request(QUrl(portalUrl + QStringLiteral("/api/host/queue/push")));
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
@@ -503,12 +515,13 @@ void PortalClient::pushSingerQueue(const QString &singerName, const QVariantList
     request.setTransferTimeout(kSyncTimeoutMs);
 
     setError(QString());
-    setSummary(tr("Pushing %1 song(s) for %2…").arg(songArray.size()).arg(name));
+    setSummary(dryRun ? tr("Checking the queue for %1…").arg(name)
+                      : tr("Pushing %1 song(s) for %2…").arg(songArray.size()).arg(name));
     setBusy(true);
 
     QNetworkReply *reply =
         m_network->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
-    connect(reply, &QNetworkReply::finished, this, [this, reply, name]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, name, dryRun]() {
         setBusy(false);
 
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -529,6 +542,10 @@ void PortalClient::pushSingerQueue(const QString &singerName, const QVariantList
             setError(tr("Queue push failed: %1").arg(reply->errorString()));
         } else if (status < 200 || status >= 300) {
             setError(tr("Queue push failed (HTTP %1).").arg(status));
+        } else if (dryRun) {
+            setError(QString());
+            setSummary(QString());
+            emit queuePreviewed(object.toVariantMap());
         } else {
             setError(QString());
             setSummary(tr("Pushed %1 song(s) for %2: %3 added, %4 updated, %5 removed.")

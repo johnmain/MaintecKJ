@@ -313,6 +313,10 @@ never touched. Unknown name → `404`, ambiguous name → `409`; the Settings st
 line shows the message and the reconcile counts. The push is manual — there is
 no automatic queue sync.
 
+The button first calls the endpoint with `dryRun: true`, which returns the
+add/update/remove counts **without writing**, and shows a confirmation dialog
+before the real push.
+
 Name matching is punctuation/case-insensitive on both sides; `PortalClient`
 mirrors the portal's `normalizeText()` so the badge and the push agree.
 

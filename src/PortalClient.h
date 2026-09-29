@@ -64,10 +64,16 @@ public:
     // requests for that singer. `songs` is a list of { title, artist, played }.
     Q_INVOKABLE void pushSingerQueue(const QString &singerName, const QVariantList &songs);
 
+    // Same call with a dry run: the portal computes the add/update/remove counts
+    // but writes nothing. Emits queuePreviewed() so the UI can confirm first.
+    Q_INVOKABLE void previewSingerQueue(const QString &singerName, const QVariantList &songs);
+
 signals:
     void statusChanged();
     void requestsReceived(const QVariantList &requests);
     void queueUpdatesReceived(const QVariantList &updates);
+    // Dry-run result for a queue push, for the confirmation dialog.
+    void queuePreviewed(const QVariantMap &summary);
     // The set of known portal singer names changed.
     void singersChanged();
     // A queue push completed; carries the portal's reconcile summary.
@@ -81,6 +87,9 @@ private:
 
     // Refreshes the singer directory at most once a minute, from the poll tick.
     void maybeRefreshSingers();
+
+    // Shared implementation of pushSingerQueue() / previewSingerQueue().
+    void sendQueuePush(const QString &singerName, const QVariantList &songs, bool dryRun);
 
     // Canonical name key, mirroring the portal's normalizeText() so both sides
     // agree on whether "Alice Cooper" and "alice  cooper" are the same singer.
