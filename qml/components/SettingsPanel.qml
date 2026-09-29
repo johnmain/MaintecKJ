@@ -23,6 +23,23 @@ Pane {
     readonly property string exportError: songListExporter.lastError ? songListExporter.lastError : ""
     readonly property string exportSummary: songListExporter.lastSummary ? songListExporter.lastSummary : ""
 
+    // Portal upload state. The connection fields live on the main window's
+    // Portal Settings so the exporter, this page and PortalClient share one copy.
+    readonly property QtObject portalSettings: Window.window ? Window.window.portalSettings : null
+    // `typeof` is safe even when the property is missing, so a stale binary
+    // running newer QML degrades instead of throwing a ReferenceError.
+    readonly property var portal: typeof portalClient !== "undefined" ? portalClient : null
+    readonly property string portalError: portal && portal.lastError ? portal.lastError : ""
+    readonly property string portalSummary: portal && portal.lastSummary ? portal.lastSummary : ""
+    // Combines the last message with how many status updates are waiting a retry.
+    readonly property string portalStatus: {
+        var base = portalError.length > 0 ? portalError : portalSummary
+        var pending = portal ? portal.pendingUpdates : 0
+        if (pending > 0)
+            return (base.length > 0 ? base + "  ·  " : "") + pending + " update(s) pending retry"
+        return base
+    }
+
     // Reported when a karaoke index run finishes.
     property string scanMessage: ""
 
@@ -447,6 +464,119 @@ Pane {
                                       : settingsPanel.exportSummary
                                 visible: text.length > 0
                                 color: settingsPanel.exportError.length > 0 ? "#CC0000" : "#00AA00"
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+                }
+
+                // Push the song library to the self-hosted singer portal. Uses
+                // the same Artist/Title export as the song book, so there is no
+                // second format to maintain.
+                GroupBox {
+                    title: "Singer Portal"
+                    Layout.fillWidth: true
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 8
+
+                        Label {
+                            text: "Upload the song library to the web portal so singers can search it. Use https:// in production; a plain http:// address (or a bare host:port) is fine for local testing. The portal must have the same bridge token configured."
+                            wrapMode: Text.WordWrap
+                            font.pixelSize: 11
+                            opacity: 0.7
+                            Layout.fillWidth: true
+                        }
+
+                        CheckBox {
+                            text: "Enable portal sync"
+                            checked: settingsPanel.portalSettings ? settingsPanel.portalSettings.enabled : false
+                            onToggled: if (settingsPanel.portalSettings) settingsPanel.portalSettings.enabled = checked
+                        }
+
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: 8
+                            rowSpacing: 6
+
+                            Label { text: "Portal URL" }
+
+                            TextField {
+                                id: portalUrlField
+                                Layout.fillWidth: true
+                                placeholderText: "http://192.168.1.50:3000"
+                                text: settingsPanel.portalSettings ? settingsPanel.portalSettings.portalUrl : ""
+                                onTextEdited: {
+                                    if (settingsPanel.portalSettings)
+                                        settingsPanel.portalSettings.portalUrl = portalUrlField.text
+                                }
+                            }
+
+                            Label { text: "Bridge token" }
+
+                            TextField {
+                                id: bridgeTokenField
+                                Layout.fillWidth: true
+                                echoMode: TextInput.Password
+                                text: settingsPanel.portalSettings ? settingsPanel.portalSettings.bridgeToken : ""
+                                onTextEdited: {
+                                    if (settingsPanel.portalSettings)
+                                        settingsPanel.portalSettings.bridgeToken = bridgeTokenField.text
+                                }
+                            }
+
+                            Label {
+                                Layout.columnSpan: 2
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                                font.pixelSize: 10
+                                opacity: 0.6
+                                text: {
+                                    var token = settingsPanel.portalSettings ? settingsPanel.portalSettings.bridgeToken : ""
+                                    return token.length > 0
+                                           ? ("Token set (" + token.length + " characters) — must match HOST_BRIDGE_TOKEN in the portal .env")
+                                           : "No token set — copy HOST_BRIDGE_TOKEN from the portal .env"
+                                }
+                            }
+                        }
+
+                        CheckBox {
+                            text: "Sync after each export"
+                            checked: settingsPanel.portalSettings ? settingsPanel.portalSettings.autoSyncAfterExport : false
+                            onToggled: if (settingsPanel.portalSettings) settingsPanel.portalSettings.autoSyncAfterExport = checked
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Button {
+                                text: "Sync Now"
+                                enabled: settingsPanel.portal !== null && !settingsPanel.portal.busy
+                                onClicked: {
+                                    if (settingsPanel.portal)
+                                        settingsPanel.portal.syncSongList()
+                                }
+                            }
+
+                            Button {
+                                text: "Test"
+                                enabled: settingsPanel.portal !== null && !settingsPanel.portal.busy
+                                onClicked: {
+                                    if (settingsPanel.portal)
+                                        settingsPanel.portal.testConnection()
+                                }
+                            }
+
+                            Label {
+                                text: settingsPanel.portalStatus
+                                visible: text.length > 0
+                                color: settingsPanel.portalError.length > 0 ? "#CC0000" : "#00AA00"
                                 font.pixelSize: 10
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true

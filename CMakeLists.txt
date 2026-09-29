@@ -4,7 +4,7 @@ project(MaintecKJ VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Sql Multimedia Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Sql Multimedia Concurrent Network)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(RUBBERBAND REQUIRED IMPORTED_TARGET rubberband)
@@ -26,6 +26,10 @@ qt_add_executable(mainteckj-app
     src/OpenKjImporter.h
     src/SongListExporter.cpp
     src/SongListExporter.h
+    src/PortalClient.cpp
+    src/PortalClient.h
+    src/WebRequestModel.cpp
+    src/WebRequestModel.h
     src/BackgroundPlaylistModel.cpp
     src/BackgroundPlaylistModel.h
     src/ModeController.cpp
@@ -62,6 +66,7 @@ qt_add_qml_module(MaintecKJ
         qml/components/SingerPanel.qml
         qml/components/SingerQueuePanel.qml
         qml/components/SongDatabasePanel.qml
+        qml/components/WebRequestsPanel.qml
 )
 
 target_link_libraries(mainteckj-app PRIVATE
@@ -73,6 +78,7 @@ target_link_libraries(mainteckj-app PRIVATE
     Qt6::Sql
     Qt6::Multimedia
     Qt6::Concurrent
+    Qt6::Network
     PkgConfig::RUBBERBAND
     PkgConfig::ALSA
 )

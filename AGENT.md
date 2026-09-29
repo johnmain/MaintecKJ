@@ -123,3 +123,169 @@ The main window uses nested `SplitView` components to allow full user control ov
   2. Modify ONLY the file causing the build failure.
   3. Do NOT rewrite unrelated QML components or reconfigure CMake URIs unless explicitly required.
 * Two-Failure Stop Policy: If a build fails twice consecutively on the same issue, STOP immediately. Report the exact compiler log and request human guidance instead of attempting further automated fixes.
+
+---
+
+## 10. Singer Web Portal Integration (Bridge)
+
+The desktop host is paired with a self-hosted singer portal (separate repo:
+`MaintecKJ_SongRequest`, SvelteKit on the NAS, exposed through the Netbird
+reverse proxy). Singers search the catalog and submit requests from their
+phones; the host remains the source of truth for files and playback, and the
+portal is the source of truth for singer identity (OAuth) and the request queue.
+
+The integration is **host-initiated (pull)**, like OpenKJ: the portal never dials
+the host, so the DJ machine needs no inbound port and works behind NAT.
+
+### 10.1 Topology
+
+```
+singer phone ──HTTPS──▶ portal (NAS / Netbird)
+                            ▲   │
+   POST /api/host/requests/poll│  │ PATCH /api/host/requests/{id}
+   POST /api/catalog/ingest    │  │
+                            └───┴── desktop host (polls on a timer)
+```
+
+All three calls are made by the host and authenticated with one shared bearer
+secret, `bridgeToken`.
+
+### 10.2 Configuration (QSettings, category `Portal`)
+
+| Key               | Default | Meaning                                                  |
+| ----------------- | ------- | -------------------------------------------------------- |
+| `enabled`         | `false` | Master switch for polling and outbound calls             |
+| `portalUrl`       | `""`    | Portal base URL, e.g. `https://karaoke.example.org`       |
+| `bridgeToken`     | `""`    | Shared secret; sent as `Authorization: Bearer <token>`    |
+| `pollIntervalMs`  | `5000`  | How often the host polls for new requests                 |
+| `autoSyncCatalog` | `false` | Push the song list after library changes (debounced)      |
+
+`MAINTECKJ_PORTAL_TOKEN` may override `bridgeToken` for testing. For LAN testing
+an `http://` URL is fine — a bare `host:port` defaults to `http://`; production
+should use `https://`.
+
+### 10.3 Poll for requests (host → portal)
+
+`POST {portalUrl}/api/host/requests/poll`, on a `QTimer` while `enabled`.
+
+```json
+{
+  "count": 1,
+  "requests": [
+    {
+      "id": "<portal request uuid>",
+      "song": { "id": "<portal song uuid>", "title": "Bohemian Rhapsody", "artist": "Queen" },
+      "singer": { "id": "<portal user uuid>", "name": "Ada", "stageName": "Diva" },
+      "note": "table 5",
+      "requestedAt": "2026-09-28T21:58:46.083Z"
+    }
+  ],
+  "updates": [{ "id": "<portal request uuid>", "played": false }]
+}
+```
+
+- Auth: `Authorization: Bearer <bridgeToken>`; reply `401` on a mismatch.
+- The portal **claims** every returned request (`delivered_at`), so the next poll
+  returns nothing — a request is handed out exactly once. Persist each one (see
+  §10.5) before the next poll.
+- `song.files` is not sent. **Resolve the playable file(s) locally** by trimmed,
+  case-insensitive `artist` + `title` against `songs` (the same rule
+  `OpenKjImporter` uses for path mapping). If several files match, show them all
+  at triage and let the host pick.
+- Keep the poll handler cheap: store the payload; never run `ffprobe` there.
+- `updates` carries singer-requested played/unplayed toggles. Apply each to the
+  queue row whose `portal_request_id` matches, then report the outcome back
+  (§10.4) — the portal clears the pending toggle once it agrees.
+
+### 10.4 Outbound calls (host → portal)
+
+- **Catalog sync** — `POST {portalUrl}/api/catalog/ingest`, body is exactly the
+  `SongListExporter` output (`[{ "Artist": ..., "Title": ... }]`,
+  `Authorization: Bearer <bridgeToken>`). Response:
+  `{ received, imported, created, updated, skipped }`. There is **no separate
+  export format** to maintain — this is the same file the song-book workflow
+  already writes, so `PortalClient::syncSongList()` calls `SongListExporter` and
+  posts its bytes unchanged.
+- **Status update** — `PATCH {portalUrl}/api/host/requests/{id}`, body
+  `{ "status": "approved" | "playing" | "played" | "rejected" }`. Response:
+  `{ request, historyRecorded }`. Marking `played` records the song in the
+  singer's history on the portal, exactly once.
+- **Played sync** — when a toggle from `updates` is applied, or the rotation
+  marks a queue row played/unplayed, `PATCH` `played` / `approved`. The portal
+  stores `host_played` and clears the singer's pending toggle.
+- **Health** — `GET {portalUrl}/api/health` (public) backs the "Test" button.
+
+Use `QNetworkAccessManager` (async) with a request timeout. Outbound status
+updates are queued in `PortalClient` (latest wins per request) and retried on
+every poll tick; the Settings status line shows the pending count while the
+portal is unreachable, so a status change is never silently dropped.
+
+### 10.5 Local data model
+
+New table, owned by the host:
+
+```sql
+CREATE TABLE IF NOT EXISTS web_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  portal_request_id TEXT UNIQUE,   -- portal uuid, echoed by status callbacks
+  singer_name TEXT,                -- portal display name
+  stage_name TEXT,
+  artist TEXT,
+  title TEXT,
+  note TEXT,
+  requested_at TEXT,
+  received_at TEXT,
+  status TEXT DEFAULT 'pending',   -- pending/approved/playing/played/rejected
+  resolved_file_path TEXT,
+  resolved_source TEXT,
+  resolved_duration INTEGER
+);
+```
+
+Requests land **pending** and are surfaced for host triage — they are never
+added to the rotation automatically (consistent with the existing rule that
+nothing auto-plays).
+
+Queue rows additionally carry `portal_request_id` (added by migration) so a
+portal request maps to its queue entry for the played/unplayed sync. The triage
+panel passes it into `SongQueueModel::addSong`.
+
+### 10.6 Status lifecycle
+
+| Host action                          | Callback status |
+| ------------------------------------ | --------------- |
+| Request claimed on poll              | (none — portal already knows `pending`) |
+| Added to a singer's queue            | `approved`      |
+| Host starts the song, or it finishes | `played` (no separate `playing` state is sent) |
+| Song finished / marked played        | `played`        |
+| Host rejects the request             | `rejected`      |
+| Singer toggles played/unplayed       | Host applies it on the next poll, then PATCHes `played` / `approved` |
+
+### 10.7 Triage UI
+
+A "Requests" tab/panel (like the existing library/queue panels) listing pending
+web requests with the singer, artist/title, note and the matching local file
+versions (`source`, `file_path`, duration). Actions: **Add to Queue** (choose a
+file) and **Reject**. Add to Queue also offers a **singer picker**: queue under a
+new singer named after the portal user, or pick an existing rotation singer and
+rename them to the portal name (their queue rows follow, via
+`SingerModel::renameSinger` → `SongQueueModel::renameSinger`) so one person keeps
+a single identity. Show a pending-count badge, and reflect polling/disabled
+state from the Settings tab.
+
+### 10.8 Implementation notes
+
+- `Qt6::Network` is already in `find_package` and `target_link_libraries`.
+- Classes: `PortalClient` (`QNetworkAccessManager` + poll `QTimer`;
+  `syncSongList()`, `updateRequestStatus()`, `testConnection()`),
+  `WebRequestModel` (list model over `web_requests`), plus `DatabaseManager`
+  methods for the table.
+- Never log the token. Debounce catalog auto-sync so a rescan does not upload
+  per song. The mandatory build check in §8 still applies after every change
+  (`[100%] Built target mainteckj-app`).
+
+### 10.9 Non-goals (v1)
+
+- The host does not authenticate singers; it trusts the bearer token.
+- No inbound HTTP listener or WebSocket: the transport is host-initiated polling
+  only. A future push transport can reuse the same request payload shape.

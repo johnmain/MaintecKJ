@@ -4,6 +4,7 @@
 #include <QAbstractListModel>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 class DatabaseManager;
 
@@ -37,6 +38,14 @@ public:
     Q_INVOKABLE QString statusAt(int index) const;
     Q_INVOKABLE void moveToBottom(int index);
     Q_INVOKABLE void setStatus(int index, const QString &status);
+
+    // Rotation order names, for the web-requests singer picker.
+    Q_INVOKABLE QStringList singerNames() const;
+    // Renames a singer. Emits singerRenamed so their queue rows follow.
+    Q_INVOKABLE bool renameSinger(int index, const QString &newName);
+
+signals:
+    void singerRenamed(const QString &from, const QString &to);
 
 private:
     struct Singer {

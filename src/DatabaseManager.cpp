@@ -1,6 +1,7 @@
 #include "DatabaseManager.h"
 #include "FolderScanner.h"
 #include <QDebug>
+#include <QDateTime>
 #include <QRegularExpression>
 #include <QFileInfo>
 #include <QSet>
@@ -321,6 +322,27 @@ bool DatabaseManager::initializeDatabase()
         return false;
     }
 
+    // Requests claimed from the singer portal (pull model). The portal's request
+    // uuid is unique, so re-inserting the same claim is a no-op.
+    if (!query.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS web_requests ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "portal_request_id TEXT UNIQUE, "
+            "singer_name TEXT, "
+            "stage_name TEXT, "
+            "artist TEXT, "
+            "title TEXT, "
+            "note TEXT, "
+            "requested_at TEXT, "
+            "received_at TEXT, "
+            "status TEXT DEFAULT 'pending', "
+            "resolved_file_path TEXT, "
+            "resolved_source TEXT, "
+            "resolved_duration INTEGER)"))) {
+        qDebug() << "Error creating web_requests table:" << query.lastError().text();
+        return false;
+    }
+
     // Migrate: associate each song with the root directory it came from.
     bool hasDirectoryId = false;
     if (query.exec(QStringLiteral("PRAGMA table_info(songs)"))) {
@@ -394,6 +416,22 @@ bool DatabaseManager::initializeDatabase()
     if (!hasQueueKeyShift) {
         if (!query.exec(QStringLiteral("ALTER TABLE queue ADD COLUMN key_shift INTEGER DEFAULT 0")))
             qDebug() << "Error adding queue key_shift column:" << query.lastError().text();
+    }
+
+    // Migrate: link a queue row back to the portal request it came from, so
+    // played/unplayed changes can be synced both ways.
+    bool hasPortalRequestId = false;
+    if (query.exec(QStringLiteral("PRAGMA table_info(queue)"))) {
+        while (query.next()) {
+            if (query.value(1).toString() == QLatin1String("portal_request_id")) {
+                hasPortalRequestId = true;
+                break;
+            }
+        }
+    }
+    if (!hasPortalRequestId) {
+        if (!query.exec(QStringLiteral("ALTER TABLE queue ADD COLUMN portal_request_id TEXT")))
+            qDebug() << "Error adding queue portal_request_id column:" << query.lastError().text();
     }
 
     ensureIndexes();
@@ -691,6 +729,70 @@ QVariantList DatabaseManager::getSongsByTitle(const QString &title)
     query.prepare(QStringLiteral("SELECT id, artist, title, file_path, duration, is_deleted, source FROM songs WHERE title = ? AND is_deleted = 0 ORDER BY artist"));
     query.addBindValue(title);
     return executeQuery(query);
+}
+
+QVariantList DatabaseManager::findSongsByArtistTitle(const QString &artist, const QString &title)
+{
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral(
+        "SELECT id, artist, title, file_path, duration, is_deleted, source FROM songs "
+        "WHERE artist = ? COLLATE NOCASE AND title = ? COLLATE NOCASE AND is_deleted = 0 "
+        "ORDER BY source, file_path"));
+    query.addBindValue(artist);
+    query.addBindValue(title);
+    return executeQuery(query);
+}
+
+bool DatabaseManager::insertWebRequest(const QVariantMap &request)
+{
+    return executePreparedQuery(
+        QStringLiteral("INSERT OR IGNORE INTO web_requests "
+                       "(portal_request_id, singer_name, stage_name, artist, title, note, "
+                       " requested_at, received_at, status) "
+                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')"),
+        { request.value(QStringLiteral("portalRequestId")).toString(),
+          request.value(QStringLiteral("singerName")).toString(),
+          request.value(QStringLiteral("stageName")).toString(),
+          request.value(QStringLiteral("artist")).toString(),
+          request.value(QStringLiteral("title")).toString(),
+          request.value(QStringLiteral("note")).toString(),
+          request.value(QStringLiteral("requestedAt")).toString(),
+          QDateTime::currentDateTime().toString(Qt::ISODate) });
+}
+
+QVariantList DatabaseManager::loadWebRequests()
+{
+    QVariantList results;
+
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral(
+        "SELECT portal_request_id, singer_name, stage_name, artist, title, note, requested_at "
+        "FROM web_requests WHERE status = 'pending' ORDER BY received_at ASC"));
+
+    if (query.exec()) {
+        while (query.next()) {
+            QVariantMap row;
+            row[QStringLiteral("portalRequestId")] = query.value(0).toString();
+            row[QStringLiteral("singerName")] = query.value(1).toString();
+            row[QStringLiteral("stageName")] = query.value(2).toString();
+            row[QStringLiteral("artist")] = query.value(3).toString();
+            row[QStringLiteral("title")] = query.value(4).toString();
+            row[QStringLiteral("note")] = query.value(5).toString();
+            row[QStringLiteral("requestedAt")] = query.value(6).toString();
+            results.append(row);
+        }
+    } else {
+        qDebug() << "Query error:" << query.lastError().text();
+    }
+
+    return results;
+}
+
+bool DatabaseManager::deleteWebRequest(const QString &portalRequestId)
+{
+    return executePreparedQuery(
+        QStringLiteral("DELETE FROM web_requests WHERE portal_request_id = ?"),
+        { portalRequestId });
 }
 
 bool DatabaseManager::addDirectory(const QString &directoryPath, const QString &pattern)
@@ -1089,7 +1191,7 @@ QVariantList DatabaseManager::loadQueue()
     QVariantList results;
     QSqlQuery query(m_db);
     query.prepare(QStringLiteral(
-        "SELECT singer, title, artist, file_path, duration, is_played, source, key_shift FROM queue ORDER BY position"));
+        "SELECT singer, title, artist, file_path, duration, is_played, source, key_shift, portal_request_id FROM queue ORDER BY position"));
     if (query.exec()) {
         while (query.next()) {
             QVariantMap item;
@@ -1101,6 +1203,7 @@ QVariantList DatabaseManager::loadQueue()
             item[QStringLiteral("isPlayed")] = query.value(5).toInt() != 0;
             item[QStringLiteral("source")] = query.value(6).toString();
             item[QStringLiteral("keyShift")] = query.value(7).toInt();
+            item[QStringLiteral("portalRequestId")] = query.value(8).toString();
             results.append(item);
         }
     }
@@ -1119,8 +1222,8 @@ void DatabaseManager::saveQueue(const QVariantList &items)
         const QVariantMap item = entry.toMap();
         QSqlQuery insert(m_db);
         insert.prepare(QStringLiteral(
-            "INSERT INTO queue (singer, title, artist, file_path, duration, is_played, source, key_shift, position) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+            "INSERT INTO queue (singer, title, artist, file_path, duration, is_played, source, key_shift, portal_request_id, position) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
         insert.addBindValue(item.value(QStringLiteral("singer")).toString());
         insert.addBindValue(item.value(QStringLiteral("title")).toString());
         insert.addBindValue(item.value(QStringLiteral("artist")).toString());
@@ -1129,11 +1232,31 @@ void DatabaseManager::saveQueue(const QVariantList &items)
         insert.addBindValue(item.value(QStringLiteral("isPlayed")).toBool() ? 1 : 0);
         insert.addBindValue(item.value(QStringLiteral("source")).toString());
         insert.addBindValue(item.value(QStringLiteral("keyShift")).toInt());
+        insert.addBindValue(item.value(QStringLiteral("portalRequestId")).toString());
         insert.addBindValue(position++);
         insert.exec();
     }
 
     m_db.commit();
+}
+
+bool DatabaseManager::executePreparedQuery(const QString &query, const QVariantList &bindings)
+{
+    QSqlQuery prepared(m_db);
+    if (!prepared.prepare(query)) {
+        qDebug() << "Prepare error:" << prepared.lastError().text();
+        return false;
+    }
+
+    for (const QVariant &binding : bindings)
+        prepared.addBindValue(binding);
+
+    if (!prepared.exec()) {
+        qDebug() << "Query error:" << prepared.lastError().text();
+        return false;
+    }
+
+    return true;
 }
 
 QVariantList DatabaseManager::executeQuery(QSqlQuery &query)

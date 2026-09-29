@@ -36,6 +36,18 @@ ApplicationWindow {
     }
     readonly property QtObject displaySettings: displaySettingsStore
 
+    // Singer portal connection, shared with the Settings tab.
+    Settings {
+        id: portalSettingsStore
+        category: "Portal"
+        property bool enabled: false
+        property string portalUrl: ""
+        property string bridgeToken: ""
+        property bool autoSyncAfterExport: false
+        property int pollIntervalMs: 5000
+    }
+    readonly property QtObject portalSettings: portalSettingsStore
+
     onWidthChanged: settings.windowWidth = width
     onHeightChanged: settings.windowHeight = height
 
@@ -91,6 +103,14 @@ ApplicationWindow {
                             modeTabs.currentIndex = wanted
                     }
                 }
+            }
+
+            Button {
+                text: webRequestModel.pendingCount > 0
+                      ? "\uD83D\uDD14  Requests (" + webRequestModel.pendingCount + ")"
+                      : "\uD83D\uDD14  Requests"
+                highlighted: webRequestModel.pendingCount > 0
+                onClicked: webRequestsDialog.open()
             }
 
             Label {
@@ -219,6 +239,21 @@ ApplicationWindow {
             color: palette.highlightedText
             elide: Text.ElideRight
             verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    // Singer requests claimed from the web portal (pull model).
+    Dialog {
+        id: webRequestsDialog
+        title: "Singer Requests"
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(mainWindow.width - 40, 760)
+        height: Math.min(mainWindow.height - 80, 560)
+        standardButtons: Dialog.Close
+
+        contentItem: Loader {
+            source: Qt.resolvedUrl("components/WebRequestsPanel.qml")
         }
     }
 }

@@ -18,6 +18,7 @@ struct SongItem {
     int duration = 0;        // seconds
     bool isPlayed = false;
     int keyShift = 0;   // semitones, -6..+6
+    QString portalRequestId;  // links back to a web request, if any
 };
 
 class SongQueueModel : public QAbstractListModel
@@ -37,7 +38,8 @@ public:
         DurationRole,
         IsPlayedRole,
         SourceRole,
-        KeyShiftRole
+        KeyShiftRole,
+        PortalRequestIdRole
     };
 
     explicit SongQueueModel(QObject *parent = nullptr);
@@ -48,7 +50,8 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     Q_INVOKABLE void addSong(const QString &singer, const QString &title, const QString &artist,
-                             const QString &path, int duration, const QString &source = QString());
+                             const QString &path, int duration, const QString &source = QString(),
+                             const QString &portalRequestId = QString());
     Q_INVOKABLE void toggleSort(int column);
     Q_INVOKABLE void removeSong(int index);
     Q_INVOKABLE void moveSong(int fromIndex, int toIndex);
@@ -64,6 +67,14 @@ public:
     // otherwise load and then silently never play.
     Q_INVOKABLE QString playablePathAt(int index) const;
     Q_INVOKABLE void clearQueue();
+
+    // Renames a singer across their queue rows. Used when a web request is
+    // assigned to an existing singer and adopts the portal name.
+    Q_INVOKABLE void renameSinger(const QString &from, const QString &to);
+
+    // Applies a played/unplayed toggle the singer made on the portal. Rows that
+    // carry the portal request id are updated; a signal reports it back.
+    Q_INVOKABLE void applyPortalPlayed(const QString &portalRequestId, bool played);
 
     // Bulk insert. While active, adding songs skips the full-queue rewrite that
     // persist() normally does on every change, so importing a few hundred songs
@@ -90,6 +101,9 @@ public:
 signals:
     void selectedSingerNameChanged();
     void sortChanged();
+    // Emitted when a queue row linked to a web request changes played state, so
+    // the portal can be told (and the singer's pending toggle cleared).
+    void portalPlayedChanged(const QString &portalRequestId, bool played);
 
 private:
     QList<SongItem> m_songs;

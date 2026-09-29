@@ -72,6 +72,16 @@ public:
     QVariantList getSongsByArtist(const QString &artist);
     QVariantList getSongsByTitle(const QString &title);
 
+    // Local files matching a portal request's artist + title (case-insensitive),
+    // so the host can choose which provider version to queue.
+    Q_INVOKABLE QVariantList findSongsByArtistTitle(const QString &artist, const QString &title);
+
+    // Singer web portal requests (pull model), held here until the host triages
+    // them. Keyed on the portal's request id.
+    bool insertWebRequest(const QVariantMap &request);
+    QVariantList loadWebRequests();
+    bool deleteWebRequest(const QString &portalRequestId);
+
     // Directory operations. `pattern` is the naming pattern the folder is
     // indexed with; empty means the default {Artist} - {Title}.
     Q_INVOKABLE bool addDirectory(const QString &directoryPath, const QString &pattern = QString());

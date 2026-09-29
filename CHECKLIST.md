@@ -209,3 +209,54 @@ Artifact: `dist/MaintecKJ-0.1.0-linux-x86_64.tar.gz`, 157 MB compressed and 381 
 Known constraints:
 - Built against glibc 2.44, so it will not start on a distribution older than roughly this one. libc cannot be bundled around.
 - Qt's deploy copies the whole dependency closure - 605 libraries, including a copy of glibc itself, which is inert on a machine that already has one. That is why the archive is large.
+
+## Phase 11: Singer Web Portal Integration
+
+Goal: connect the host to the self-hosted singer portal so phone requests arrive
+in a staging list for triage, and so the host can keep the portal's song catalog
+in sync. The full wire contract lives in `AGENT.md` §10; the portal side is the
+`MaintecKJ_SongRequest` repo.
+
+### Configuration & settings
+- [x] Add `Qt6::Network` to `find_package` and `target_link_libraries`
+- [x] Portal connection settings in the QML `Settings` category `Portal` (`enabled`, `portalUrl`, `bridgeToken`, `autoSyncAfterExport`); `PortalClient` reads them directly
+- [x] Settings tab "Singer Portal" section: enable toggle, portal URL, bridge token (masked), "Sync after each export", "Sync Now", "Test", and a status line (last sync / last error)
+- [x] `pollIntervalMs` in the `Portal` settings (default 5000 ms); `MAINTECKJ_PORTAL_TOKEN` env override still TODO
+
+### Outbound calls (host → portal) — catalog upload (DONE)
+- [x] `PortalClient` over `QNetworkAccessManager`
+- [x] `SongListExporter::buildJsonString()` exposes the export in memory; `exportToFile()` reuses it, so the uploaded payload is byte-identical to the file the song book uses
+- [x] `PortalClient::syncSongList()` POSTs the export to `{portalUrl}/api/catalog/ingest` with `Authorization: Bearer <bridgeToken>`
+- [x] Uploads automatically after an export when "Sync after each export" is on, and on demand via "Sync Now"
+- [x] `PortalClient::testConnection()` GETs `/api/health` and reports reachability
+- [x] `updateRequestStatus(portalRequestId, status)` calls `PATCH {portalUrl}/api/host/requests/{id}` and logs failures (retry/backoff still TODO)
+- [ ] Debounced auto-sync after a rescan settles (currently syncs only after an explicit export / Sync Now)
+
+### Polling for requests (host → portal)
+- [x] `PortalClient::pollRequests()` `POST`s `{portalUrl}/api/host/requests/poll` with the bearer token, on a `QTimer` (`pollIntervalMs`, default 5000 ms) while enabled
+- [x] `web_requests` table created/migrated in `DatabaseManager::initializeDatabase()` (columns per AGENT §10.5)
+- [x] Each claimed request is stored **pending** and the model emits `pendingCountChanged`; never added to the rotation automatically
+- [x] `WebRequestModel` list model over `web_requests`, with a pending-count property for the badge
+- [x] Poll failures are logged and retried on the next tick; the token is never logged
+
+### Triage & lifecycle
+- [x] Resolve local file(s) for an incoming request by trimmed, case-insensitive Artist/Title against `songs` (`DatabaseManager::findSongsByArtistTitle`), keeping every matching version with its `source`
+- [x] `WebRequestsPanel.qml` (opened from the header's bell button): singer, artist/title, note, matching file versions, pending badge
+- [x] "Add to Queue" offers a **singer picker** — a new singer named after the portal user, or an existing rotation singer which is then renamed to the portal name (their queue rows follow) — inserts an unplayed `queue` row, then PATCHes `approved`; a file chooser is shown when more than one version matches
+- [x] "Reject" PATCHes `rejected`
+- [x] Marking a queue song played (host starts it, or it finishes) PATCHes `played`; a distinct `playing` state is intentionally not sent
+- [x] Outbound status updates are queued and retried on each poll tick, with the pending count shown in the settings status line — rather than dropped
+
+### Played/unplayed sync (two-way)
+- [x] Host queue rows carry `portal_request_id`, set when a web request is added via `SongQueueModel::addSong(..., reqPortalId)`
+- [x] The poll response's `updates` are applied to the matching queue row (`SongQueueModel::applyPortalPlayed(id, played)`)
+- [x] Any played change on a portal-linked queue row is reported back (`portalPlayedChanged` → `PATCH` `played`/`approved`), clearing the singer's pending toggle
+- [x] Marking a queue song played — whether the host starts it (double-click) or it finishes — PATCHes `played`. A distinct `playing` state is deliberately not sent.
+
+### Verification
+- [x] Build check passes (`[100%] Built target mainteckj-app`); the app launches cleanly and `qmllint` reports no QML errors in `Main.qml` / `WebRequestsPanel.qml` / `SettingsPanel.qml`
+- [x] Poll end-to-end: the desktop claims a pending request from the portal (portal marks it delivered) and stores it in `web_requests` — verified offscreen with the real portal
+- [x] Played-sync end-to-end: a singer's unplayed toggle is applied to the host queue (`is_played` 1→0) and reported back (portal `host_played=0`, `pending_played=null`) — verified offscreen
+- [x] Retry end-to-end: with the portal's `PATCH` failing (stub), the update stays queued and is retried on the next poll (two attempts observed) — verified offscreen
+- [ ] `/tmp/portal_test.cpp` style assertions: inbound auth accept/reject, JSON parse + `202`, empty-`files` request resolves against the local library (including a multi-version case), status mapping for approved/playing/played/rejected, and the catalog body matching `SongListExporter` byte-for-byte
+- [ ] Manual end-to-end: "Sync Now" loads the library into the portal; a phone request then arrives, is triaged into the rotation, and the portal shows approved → playing → played

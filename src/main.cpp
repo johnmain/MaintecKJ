@@ -5,6 +5,9 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QSettings>
+#include <QVariantList>
+#include <QVariantMap>
 #include <utility>
 #include "SingerModel.h"
 #include "SongQueueModel.h"
@@ -19,6 +22,8 @@
 #include "BackgroundPlaylistModel.h"
 #include "ModeController.h"
 #include "SongListExporter.h"
+#include "PortalClient.h"
+#include "WebRequestModel.h"
 
 // Supplied by CMake (see target_compile_definitions in CMakeLists.txt). Kept
 // optional so the file still compiles if the definition is ever removed.
@@ -50,6 +55,8 @@ int main(int argc, char *argv[])
     MidiController midiController;
     OpenKjImporter openKjImporter;
     SongListExporter songListExporter;
+    PortalClient portalClient;
+    WebRequestModel webRequestModel;
     ModeController modeController;
 
     rotation.setSingerModel(&singerModel);
@@ -70,6 +77,20 @@ int main(int argc, char *argv[])
     // Plain Artist/Title list of the whole library, for the song-book workflow.
     songListExporter.setDatabaseManager(&databaseManager);
 
+    // The same export can be pushed to the singer portal. With "Sync after
+    // export" enabled, a successful export uploads the list automatically.
+    portalClient.setSongListExporter(&songListExporter);
+    QObject::connect(&songListExporter, &SongListExporter::exportFinished, &portalClient,
+                     [&portalClient]() {
+                         QSettings settings;
+                         settings.beginGroup(QStringLiteral("Portal"));
+                         const bool autoSync =
+                             settings.value(QStringLiteral("autoSyncAfterExport"), false).toBool();
+                         settings.endGroup();
+                         if (autoSync)
+                             portalClient.syncSongList();
+                     });
+
     // A song ending on its own is routed by the mode: karaoke advances the
     // rotation (without auto-playing), background music plays the next entry.
     modeController.setPlayer(&mediaPlayer);
@@ -83,6 +104,34 @@ int main(int argc, char *argv[])
     singerModel.setDatabaseManager(&databaseManager);
     songQueueModel.setDatabaseManager(&databaseManager);
     backgroundPlaylistModel.setDatabaseManager(&databaseManager);
+    webRequestModel.setDatabaseManager(&databaseManager);
+
+    // Renaming a singer (e.g. to adopt a portal name) follows into their queue.
+    QObject::connect(&singerModel, &SingerModel::singerRenamed, &songQueueModel,
+                     &SongQueueModel::renameSinger);
+
+    // Portal played/unplayed sync. Singer toggles arrive on the poll and are
+    // applied to the queue; any played change on a portal-linked row is reported
+    // back, which also clears the singer's pending toggle on the portal.
+    QObject::connect(&portalClient, &PortalClient::queueUpdatesReceived, &songQueueModel,
+                     [&songQueueModel](const QVariantList &updates) {
+                         for (const QVariant &value : updates) {
+                             const QVariantMap update = value.toMap();
+                             songQueueModel.applyPortalPlayed(
+                                 update.value(QStringLiteral("id")).toString(),
+                                 update.value(QStringLiteral("played")).toBool());
+                         }
+                     });
+    QObject::connect(&songQueueModel, &SongQueueModel::portalPlayedChanged, &portalClient,
+                     [&portalClient](const QString &portalRequestId, bool played) {
+                         portalClient.updateRequestStatus(portalRequestId,
+                                                          played ? QStringLiteral("played")
+                                                                 : QStringLiteral("approved"));
+                     });
+
+    // Requests claimed from the portal by the poller land in the triage model.
+    QObject::connect(&portalClient, &PortalClient::requestsReceived, &webRequestModel,
+                     &WebRequestModel::ingest);
     
     QQmlApplicationEngine engine;
     
@@ -105,6 +154,8 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("midiController", &midiController);
     engine.rootContext()->setContextProperty("openKjImporter", &openKjImporter);
     engine.rootContext()->setContextProperty("songListExporter", &songListExporter);
+    engine.rootContext()->setContextProperty("portalClient", &portalClient);
+    engine.rootContext()->setContextProperty("webRequestModel", &webRequestModel);
     
     // Pick up the mode the app was left in. Deliberately not setMode(): there is
     // no deck to fade out at start-up.

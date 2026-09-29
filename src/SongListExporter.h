@@ -36,6 +36,10 @@ public:
     // result directly. Returns false when nothing was written.
     Q_INVOKABLE bool exportToFile(const QString &filePath);
 
+    // Builds the same Artist/Title JSON exportToFile() writes, without touching
+    // disk. PortalClient uploads these bytes to the singer portal unchanged.
+    Q_INVOKABLE QString buildJsonString();
+
 signals:
     void lastErrorChanged();
     void lastSummaryChanged();

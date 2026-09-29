@@ -93,24 +93,14 @@ void SongListExporter::setSummary(const QString &message)
     emit lastSummaryChanged();
 }
 
-bool SongListExporter::exportToFile(const QString &filePath)
+QString SongListExporter::buildJsonString()
 {
     setError(QString());
-    setSummary(QString());
     m_lastExportedCount = 0;
 
     if (!m_databaseManager) {
         setError(tr("The exporter is not connected to the song database."));
-        return false;
-    }
-
-    QString localPath = filePath;
-    const QUrl url(filePath);
-    if (url.isLocalFile())
-        localPath = url.toLocalFile();
-    if (localPath.isEmpty()) {
-        setError(tr("No destination file was given."));
-        return false;
+        return QString();
     }
 
     // Deleted songs and duplicate Artist/Title pairs both stay out. The
@@ -169,6 +159,29 @@ bool SongListExporter::exportToFile(const QString &filePath)
         output += QLatin1String("]");
     }
 
+    m_lastExportedCount = static_cast<int>(entries.size());
+    return output;
+}
+
+bool SongListExporter::exportToFile(const QString &filePath)
+{
+    setSummary(QString());
+
+    QString localPath = filePath;
+    const QUrl url(filePath);
+    if (url.isLocalFile())
+        localPath = url.toLocalFile();
+    if (localPath.isEmpty()) {
+        setError(tr("No destination file was given."));
+        return false;
+    }
+
+    // buildJsonString() resets the error and the exported count, so a failure
+    // there is already reported and nothing is written.
+    const QString output = buildJsonString();
+    if (output.isEmpty())
+        return false;
+
     QFile file(localPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         setError(tr("Could not write to %1").arg(QFileInfo(localPath).fileName()));
@@ -182,7 +195,6 @@ bool SongListExporter::exportToFile(const QString &filePath)
     }
     file.close();
 
-    m_lastExportedCount = static_cast<int>(entries.size());
     setSummary(tr("Exported %1 unique songs to %2.")
                    .arg(m_lastExportedCount)
                    .arg(QFileInfo(localPath).fileName()));

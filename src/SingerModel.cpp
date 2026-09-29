@@ -193,6 +193,34 @@ void SingerModel::setStatus(int index, const QString &status)
     persist();
 }
 
+QStringList SingerModel::singerNames() const
+{
+    QStringList names;
+    names.reserve(m_singers.size());
+    for (const Singer &singer : m_singers)
+        names.append(singer.name);
+    return names;
+}
+
+bool SingerModel::renameSinger(int index, const QString &newName)
+{
+    if (index < 0 || index >= m_singers.size())
+        return false;
+
+    const QString trimmed = newName.trimmed();
+    if (trimmed.isEmpty() || m_singers.at(index).name == trimmed)
+        return false;
+
+    const QString oldName = m_singers.at(index).name;
+    m_singers[index].name = trimmed;
+
+    const QModelIndex modelIndex = this->index(index, 0);
+    emit dataChanged(modelIndex, modelIndex, {NameRole});
+    persist();
+    emit singerRenamed(oldName, trimmed);
+    return true;
+}
+
 void SingerModel::clearAllSingers()
 {
     if (m_singers.isEmpty())

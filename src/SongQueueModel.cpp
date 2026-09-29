@@ -87,6 +87,8 @@ QVariant SongQueueModel::data(const QModelIndex &index, int role) const
         return song.source;
     case KeyShiftRole:
         return song.keyShift;
+    case PortalRequestIdRole:
+        return song.portalRequestId;
     default:
         return QVariant();
     }
@@ -104,6 +106,7 @@ QHash<int, QByteArray> SongQueueModel::roleNames() const
     roles[IsPlayedRole] = "isPlayed";
     roles[SourceRole] = "source";
     roles[KeyShiftRole] = "keyShift";
+    roles[PortalRequestIdRole] = "portalRequestId";
     return roles;
 }
 
@@ -131,6 +134,7 @@ void SongQueueModel::setDatabaseManager(DatabaseManager *databaseManager)
         song.duration = item.value(QStringLiteral("duration")).toInt();
         song.isPlayed = item.value(QStringLiteral("isPlayed")).toBool();
         song.keyShift = item.value(QStringLiteral("keyShift")).toInt();
+        song.portalRequestId = item.value(QStringLiteral("portalRequestId")).toString();
         m_songs.append(song);
     }
     rebuildVisible();
@@ -178,13 +182,15 @@ void SongQueueModel::persist()
         item[QStringLiteral("duration")] = song.duration;
         item[QStringLiteral("isPlayed")] = song.isPlayed;
         item[QStringLiteral("keyShift")] = song.keyShift;
+        item[QStringLiteral("portalRequestId")] = song.portalRequestId;
         list.append(item);
     }
     m_databaseManager->saveQueue(list);
 }
 
 void SongQueueModel::addSong(const QString &singer, const QString &title, const QString &artist,
-                             const QString &path, int duration, const QString &source)
+                             const QString &path, int duration, const QString &source,
+                             const QString &portalRequestId)
 {
     SongItem newSong;
     newSong.id = QUuid::createUuid().toString();
@@ -195,6 +201,7 @@ void SongQueueModel::addSong(const QString &singer, const QString &title, const 
     newSong.filePath = path;
     newSong.duration = duration;
     newSong.isPlayed = false;
+    newSong.portalRequestId = portalRequestId;
 
     if (matchesFilter(singer)) {
         const int insertAt = m_visible.size();
@@ -250,6 +257,10 @@ void SongQueueModel::markAsPlayed(int index, bool played)
 
     const QModelIndex modelIndex = createIndex(index, 0);
     emit dataChanged(modelIndex, modelIndex, {IsPlayedRole});
+
+    if (!m_songs.at(source).portalRequestId.isEmpty())
+        emit portalPlayedChanged(m_songs.at(source).portalRequestId, played);
+
     persist();
 }
 
@@ -384,6 +395,8 @@ void SongQueueModel::markPlayedByPath(const QString &path, const QString &singer
             const QModelIndex modelIndex = createIndex(visibleRow, 0);
             emit dataChanged(modelIndex, modelIndex, {IsPlayedRole});
         }
+        if (!m_songs.at(i).portalRequestId.isEmpty())
+            emit portalPlayedChanged(m_songs.at(i).portalRequestId, true);
         // Only write when something actually changed: saveQueue() rewrites the
         // whole table, and this is called on every song end - including songs
         // that were never queued.
@@ -404,6 +417,57 @@ void SongQueueModel::setSelectedSingerName(const QString &name)
     endResetModel();
 
     emit selectedSingerNameChanged();
+}
+
+void SongQueueModel::renameSinger(const QString &from, const QString &to)
+{
+    if (from.isEmpty() || to.isEmpty() || from == to)
+        return;
+
+    bool changed = false;
+    for (SongItem &item : m_songs) {
+        if (item.singerName == from) {
+            item.singerName = to;
+            changed = true;
+        }
+    }
+    if (!changed)
+        return;
+
+    if (m_selectedSingerName == from)
+        m_selectedSingerName = to;
+
+    beginResetModel();
+    rebuildVisible();
+    endResetModel();
+
+    emit selectedSingerNameChanged();
+    persist();
+}
+
+void SongQueueModel::applyPortalPlayed(const QString &portalRequestId, bool played)
+{
+    if (portalRequestId.isEmpty())
+        return;
+
+    bool changed = false;
+    for (SongItem &song : m_songs) {
+        if (song.portalRequestId != portalRequestId)
+            continue;
+        if (song.isPlayed != played) {
+            song.isPlayed = played;
+            changed = true;
+        }
+    }
+    if (!changed)
+        return;
+
+    beginResetModel();
+    rebuildVisible();
+    endResetModel();
+
+    emit portalPlayedChanged(portalRequestId, played);
+    persist();
 }
 
 void SongQueueModel::toggleSort(int column)
