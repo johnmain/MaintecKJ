@@ -519,7 +519,10 @@ Pane {
     Dialog {
         id: pushConfirm
         modal: true
-        anchors.centerIn: Overlay.overlay
+        // A Popup centres over its parent by itself; anchoring it to the overlay
+        // and letting a wrapping Label drive the width caused a binding loop on
+        // implicitWidth, so the width is fixed instead.
+        width: 380
         title: "Push queue to the Request DB"
         property var summary: ({})
         property string singerName: ""
