@@ -75,22 +75,22 @@ Pane {
                 font.pixelSize: 11
                 opacity: 0.7
             }
+            // The indicator and the push control only appear once the selected
+            // singer is known to be in the portal's Request DB; a walk-up who has
+            // never signed in leaves the header uncluttered.
             Label {
-                visible: songQueueModel.selectedSingerName.length > 0
-                text: queuePanel.singerInPortal ? "In Request DB" : "Not in Request DB"
-                color: queuePanel.singerInPortal ? "#4ade80" : "#fbbf24"
+                visible: songQueueModel.selectedSingerName.length > 0 && queuePanel.singerInPortal
+                text: "In Request DB"
+                color: "#4ade80"
                 font.pixelSize: 11
             }
             Button {
-                visible: songQueueModel.selectedSingerName.length > 0
+                visible: songQueueModel.selectedSingerName.length > 0 && queuePanel.singerInPortal
                 text: "Push to Portal"
-                enabled: queuePanel.singerInPortal
-                         && songQueueModel.songsForSinger(songQueueModel.selectedSingerName).length > 0
+                enabled: songQueueModel.songsForSinger(songQueueModel.selectedSingerName).length > 0
                 hoverEnabled: true
                 ToolTip.visible: hovered
-                ToolTip.text: queuePanel.singerInPortal
-                              ? "Replace this singer's portal requests with their app queue"
-                              : "Singer is not in the Request DB — they must sign in to the portal once"
+                ToolTip.text: "Replace this singer's portal requests with their app queue"
                 onClicked: portalClient.previewSingerQueue(
                                songQueueModel.selectedSingerName,
                                songQueueModel.songsForSinger(songQueueModel.selectedSingerName))
