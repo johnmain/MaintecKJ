@@ -562,7 +562,11 @@ void PortalClient::sendQueuePush(const QString &singerName, const QVariantList &
                            .arg(object.value(QStringLiteral("created")).toInt())
                            .arg(object.value(QStringLiteral("updated")).toInt())
                            .arg(object.value(QStringLiteral("removed")).toInt()));
-            emit queuePushed(object.toVariantMap());
+            // Carry the pushed app singer name alongside the server's per-song
+            // request ids so the queue rows can be linked back to the portal.
+            QVariantMap result = object.toVariantMap();
+            result.insert(QStringLiteral("appSingerName"), name);
+            emit queuePushed(result);
             refreshSingers();
         }
 

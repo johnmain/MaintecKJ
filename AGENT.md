@@ -231,7 +231,10 @@ should use `https://`.
   `{ singers: [{ id, name, stageName }] }`. Cached in `PortalClient` (refreshed
   on a 60 s timer and after a push) to drive the "In Request DB" indicator.
 - **Push a singer's queue** — `POST {portalUrl}/api/host/queue/push`, body
-  `{ singerName, songs: [{ title, artist, played }] }`. See §10.9.
+  `{ singerName, songs: [{ title, artist, played }] }`. The response adds
+  `requests: [{ title, artist, requestId }]`, which `PortalClient` hands to
+  `SongQueueModel::linkPortalRequests()` to stamp the ids on the queue rows
+  (§10.9). See §10.9.
 
 Use `QNetworkAccessManager` (async) with a request timeout. Outbound status
 updates are queued in `PortalClient` (latest wins per request) and retried on
@@ -324,6 +327,13 @@ no automatic queue sync.
 The button first calls the endpoint with `dryRun: true`, which returns the
 add/update/remove counts **without writing**, and shows a confirmation dialog
 before the real push.
+
+On success the response's `requests: [{ title, artist, requestId }]` are written
+back onto the matching queue rows by `SongQueueModel::linkPortalRequests()`
+(matched on the pushed app singer name + trimmed title/artist, since the portal
+echoes the strings it received). Without this, a song added locally and pushed
+would have no `portal_request_id`, and a later singer-delete (§10.3) could not
+find it to drop.
 
 Name matching is punctuation/case-insensitive on both sides; `PortalClient`
 mirrors the portal's `normalizeText()` so the badge and the push agree.

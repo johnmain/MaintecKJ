@@ -262,6 +262,7 @@ in sync. The full wire contract lives in `AGENT.md` §10; the portal side is the
 - [x] Queue panel shows an **In Request DB / Not in Request DB** badge for the selected singer, driven by `GET /api/host/singers`
 - [x] **Push to Portal** button sends the singer's queue (`PortalClient::pushSingerQueue` + `SongQueueModel::songsForSinger`), enabled only for a known singer with queued songs
 - [x] Confirmation first: the button dry-runs the push (`dryRun: true`) and shows the added/updated/removed counts in a dialog before applying
+- [x] The push response's per-song request ids are written back onto the queue rows (`SongQueueModel::linkPortalRequests`), so a singer-delete can drop even locally-added songs
 - [x] Portal fully reconciles that singer: queued songs become approved/delivered requests, active requests no longer queued are removed, `played`/`rejected` are untouched (unknown name → 404, ambiguous → 409)
 - [x] `PortalClient` mirrors the portal's `normalizeText()` so the badge and the push agree on name matching
 - [x] Singer directory refreshed on a 60 s timer and after each push

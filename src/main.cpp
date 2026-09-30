@@ -141,6 +141,15 @@ int main(int argc, char *argv[])
                          }
                      });
 
+    // After a queue push, write the returned portal request ids onto the
+    // matching queue rows so a later singer-delete can find and drop them.
+    QObject::connect(&portalClient, &PortalClient::queuePushed, &songQueueModel,
+                     [&songQueueModel](const QVariantMap &result) {
+                         songQueueModel.linkPortalRequests(
+                             result.value(QStringLiteral("appSingerName")).toString(),
+                             result.value(QStringLiteral("requests")).toList());
+                     });
+
     // Requests claimed from the portal by the poller land in the triage model.
     QObject::connect(&portalClient, &PortalClient::requestsReceived, &webRequestModel,
                      &WebRequestModel::ingest);

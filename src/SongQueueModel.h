@@ -81,6 +81,11 @@ public:
     // Drops every queue row linked to a portal request the singer deleted.
     Q_INVOKABLE void removeByPortalRequestId(const QString &portalRequestId);
 
+    // Writes portal request ids onto rows just pushed to the portal, so a later
+    // singer-delete can find them. `links` is the portal's [{ title, artist,
+    // requestId }] list for one singer.
+    Q_INVOKABLE void linkPortalRequests(const QString &singer, const QVariantList &links);
+
     // Applies a played/unplayed toggle the singer made on the portal. Rows that
     // carry the portal request id are updated; a signal reports it back.
     Q_INVOKABLE void applyPortalPlayed(const QString &portalRequestId, bool played);

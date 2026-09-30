@@ -3,6 +3,7 @@
 #include <QDebug>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QUuid>
 #include <algorithm>
 
@@ -483,6 +484,40 @@ void SongQueueModel::removeByPortalRequestId(const QString &portalRequestId)
     rebuildVisible();
     endResetModel();
     persist();
+}
+
+void SongQueueModel::linkPortalRequests(const QString &singer, const QVariantList &links)
+{
+    if (singer.isEmpty() || links.isEmpty())
+        return;
+
+    QHash<QString, QString> byKey;
+    for (const QVariant &value : links) {
+        const QVariantMap link = value.toMap();
+        const QString requestId = link.value(QStringLiteral("requestId")).toString();
+        const QString title = link.value(QStringLiteral("title")).toString().trimmed();
+        const QString artist = link.value(QStringLiteral("artist")).toString().trimmed();
+        if (requestId.isEmpty() || title.isEmpty() || artist.isEmpty())
+            continue;
+        byKey.insert(title + QLatin1Char('|') + artist, requestId);
+    }
+    if (byKey.isEmpty())
+        return;
+
+    bool changed = false;
+    for (SongItem &item : m_songs) {
+        if (item.singerName != singer)
+            continue;
+        const QString key = item.songTitle.trimmed() + QLatin1Char('|') + item.artist.trimmed();
+        const auto it = byKey.constFind(key);
+        if (it == byKey.constEnd() || item.portalRequestId == it.value())
+            continue;
+        item.portalRequestId = it.value();
+        changed = true;
+    }
+
+    if (changed)
+        persist();
 }
 
 void SongQueueModel::applyPortalPlayed(const QString &portalRequestId, bool played)
