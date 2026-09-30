@@ -333,10 +333,21 @@ void PortalClient::drainStatusUpdates()
         const bool ok =
             reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
 
+        // A 4xx means the request itself was rejected. 404 is the ordinary case
+        // where the portal row is already gone — the singer deleted it, or
+        // another host removed it — so there is nothing left to report and
+        // retrying would only loop forever. 401 (token), 408 (timeout) and 429
+        // (rate limit) are worth another attempt, as are 5xx and transport
+        // failures.
+        const bool permanent =
+            httpStatus >= 400 && httpStatus < 500
+            && httpStatus != 401 && httpStatus != 408 && httpStatus != 429;
+
         m_updatesInFlight = false;
 
-        if (ok) {
-            // Drop exactly the pair that just went through.
+        if (ok || permanent) {
+            // Drop exactly the pair that went through, or the one the portal no
+            // longer knows about.
             for (int i = 0; i < m_pendingStatusUpdates.size(); ++i) {
                 if (m_pendingStatusUpdates.at(i) == m_inFlightUpdate) {
                     m_pendingStatusUpdates.removeAt(i);
@@ -348,6 +359,7 @@ void PortalClient::drainStatusUpdates()
                 setError(QString());
                 setSummary(tr("Portal up to date."));
             } else {
+                setError(QString());
                 setSummary(
                     tr("%1 status update(s) still pending.").arg(m_pendingStatusUpdates.size()));
             }
@@ -360,8 +372,8 @@ void PortalClient::drainStatusUpdates()
         emit statusChanged();
         reply->deleteLater();
 
-        // More to send? Keep going; a failure waits for the next poll tick.
-        if (ok)
+        // More to send? Keep going; only a retryable failure waits for the next tick.
+        if (ok || permanent)
             drainStatusUpdates();
     });
 }
