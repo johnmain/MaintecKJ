@@ -75,13 +75,13 @@ Pane {
                 font.pixelSize: 11
                 opacity: 0.7
             }
-            // The indicator and the push control only appear once the selected
-            // singer is known to be in the portal's Request DB; a walk-up who has
-            // never signed in leaves the header uncluttered.
+            // The indicator tracks the portal either way, so the host can see
+            // whether a walk-up is linked; the push control only appears once
+            // they are in the Request DB.
             Label {
-                visible: songQueueModel.selectedSingerName.length > 0 && queuePanel.singerInPortal
-                text: "In Request DB"
-                color: "#4ade80"
+                visible: songQueueModel.selectedSingerName.length > 0
+                text: queuePanel.singerInPortal ? "In Request DB" : "Not in Request DB"
+                color: queuePanel.singerInPortal ? "#4ade80" : "#fbbf24"
                 font.pixelSize: 11
             }
             Button {
