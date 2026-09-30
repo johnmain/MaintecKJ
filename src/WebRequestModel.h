@@ -46,6 +46,9 @@ public:
     Q_INVOKABLE bool resolve(const QString &portalRequestId);
     Q_INVOKABLE bool reject(const QString &portalRequestId);
 
+    // Drops a claimed-but-untriaged request the singer deleted on the portal.
+    Q_INVOKABLE bool removeByPortalRequestId(const QString &portalRequestId);
+
 signals:
     void pendingCountChanged();
 

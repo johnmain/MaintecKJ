@@ -6,6 +6,7 @@
 #include <QPair>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -72,6 +73,9 @@ signals:
     void statusChanged();
     void requestsReceived(const QVariantList &requests);
     void queueUpdatesReceived(const QVariantList &updates);
+    // Portal request ids the singer deleted; drop the matching queue rows and
+    // acknowledge with updateRequestStatus(id, "removed").
+    void removalsReceived(const QStringList &portalRequestIds);
     // Dry-run result for a queue push, for the confirmation dialog.
     void queuePreviewed(const QVariantMap &summary);
     // The set of known portal singer names changed.

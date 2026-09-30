@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QSettings>
+#include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
 #include <utility>
@@ -127,6 +128,17 @@ int main(int argc, char *argv[])
                          portalClient.updateRequestStatus(portalRequestId,
                                                           played ? QStringLiteral("played")
                                                                  : QStringLiteral("approved"));
+                     });
+
+    // A singer deleting a request on the portal drops it from the app: the queue
+    // row (if triaged) and any untriaged request, then the removal is acked.
+    QObject::connect(&portalClient, &PortalClient::removalsReceived, &songQueueModel,
+                     [&songQueueModel, &webRequestModel, &portalClient](const QStringList &ids) {
+                         for (const QString &id : ids) {
+                             songQueueModel.removeByPortalRequestId(id);
+                             webRequestModel.removeByPortalRequestId(id);
+                             portalClient.updateRequestStatus(id, QStringLiteral("removed"));
+                         }
                      });
 
     // Requests claimed from the portal by the poller land in the triage model.

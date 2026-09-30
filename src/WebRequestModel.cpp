@@ -153,6 +153,11 @@ bool WebRequestModel::reject(const QString &portalRequestId)
     return removeRequest(portalRequestId);
 }
 
+bool WebRequestModel::removeByPortalRequestId(const QString &portalRequestId)
+{
+    return removeRequest(portalRequestId);
+}
+
 bool WebRequestModel::removeRequest(const QString &portalRequestId)
 {
     for (int i = 0; i < m_requests.size(); ++i) {

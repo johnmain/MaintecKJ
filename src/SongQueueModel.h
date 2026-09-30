@@ -78,6 +78,9 @@ public:
     // order. Used to push that singer's queue to the portal.
     Q_INVOKABLE QVariantList songsForSinger(const QString &singer) const;
 
+    // Drops every queue row linked to a portal request the singer deleted.
+    Q_INVOKABLE void removeByPortalRequestId(const QString &portalRequestId);
+
     // Applies a played/unplayed toggle the singer made on the portal. Rows that
     // carry the portal request id are updated; a signal reports it back.
     Q_INVOKABLE void applyPortalPlayed(const QString &portalRequestId, bool played);

@@ -183,7 +183,8 @@ should use `https://`.
       "requestedAt": "2026-09-28T21:58:46.083Z"
     }
   ],
-  "updates": [{ "id": "<portal request uuid>", "played": false }]
+  "updates": [{ "id": "<portal request uuid>", "played": false }],
+  "removals": ["<portal request uuid>"]
 }
 ```
 
@@ -199,6 +200,10 @@ should use `https://`.
 - `updates` carries singer-requested played/unplayed toggles. Apply each to the
   queue row whose `portal_request_id` matches, then report the outcome back
   (§10.4) — the portal clears the pending toggle once it agrees.
+- `removals` lists requests the singer deleted from their portal list. Drop the
+  matching queue row (and any untriaged request), then `PATCH { id }` with
+  `status: "removed"` so the portal deletes it. The portal hides the request from
+  the singer immediately; the row survives until the host acks.
 - `X-Accepting: true|false` on the poll carries the app's "Accepting requests"
   toggle. The poll is the heartbeat; the portal exposes the result publicly at
   `GET {portalUrl}/api/status` so the website can show/hide the request link.
@@ -215,7 +220,9 @@ should use `https://`.
 - **Status update** — `PATCH {portalUrl}/api/host/requests/{id}`, body
   `{ "status": "approved" | "playing" | "played" | "rejected" }`. Response:
   `{ request, historyRecorded }`. Marking `played` records the song in the
-  singer's history on the portal, exactly once.
+  singer's history on the portal, exactly once. The special body
+  `{ "status": "removed" }` acknowledges a singer deletion (§10.3) and deletes
+  the request; it answers `{ removed: true }`.
 - **Played sync** — when a toggle from `updates` is applied, or the rotation
   marks a queue row played/unplayed, `PATCH` `played` / `approved`. The portal
   stores `host_played` and clears the singer's pending toggle.
@@ -271,6 +278,7 @@ panel passes it into `SongQueueModel::addSong`.
 | Song finished / marked played        | `played`        |
 | Host rejects the request             | `rejected`      |
 | Singer toggles played/unplayed       | Host applies it on the next poll, then PATCHes `played` / `approved` |
+| Singer deletes it on the portal      | Host drops the queue row on the next poll, then PATCHes `removed` |
 
 ### 10.7 Triage UI
 

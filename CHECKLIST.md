@@ -254,6 +254,10 @@ in sync. The full wire contract lives in `AGENT.md` §10; the portal side is the
 - [x] Any played change on a portal-linked queue row is reported back (`portalPlayedChanged` → `PATCH` `played`/`approved`), clearing the singer's pending toggle
 - [x] Marking a queue song played — whether the host starts it (double-click) or it finishes — PATCHes `played`. A distinct `playing` state is deliberately not sent.
 
+### Deletion sync (portal → host)
+- [x] Poll `removals[]` → `PortalClient::removalsReceived` drops the matching `SongQueueModel` row and any untriaged `WebRequestModel` row, then PATCHes `removed` so the portal deletes it
+- [x] Requests the host had not claimed are deleted by the portal immediately (no queue row to drop)
+
 ### Queue push (host → Request DB)
 - [x] Queue panel shows an **In Request DB / Not in Request DB** badge for the selected singer, driven by `GET /api/host/singers`
 - [x] **Push to Portal** button sends the singer's queue (`PortalClient::pushSingerQueue` + `SongQueueModel::songsForSinger`), enabled only for a known singer with queued songs
@@ -270,3 +274,4 @@ in sync. The full wire contract lives in `AGENT.md` §10; the portal side is the
 - [ ] `/tmp/portal_test.cpp` style assertions: inbound auth accept/reject, JSON parse + `202`, empty-`files` request resolves against the local library (including a multi-version case), status mapping for approved/playing/played/rejected, and the catalog body matching `SongListExporter` byte-for-byte
 - [ ] Manual end-to-end: "Sync Now" loads the library into the portal; a phone request then arrives, is triaged into the rotation, and the portal shows approved → playing → played
 - [ ] Manual end-to-end: a walk-up singer with a queue in the app shows **In Request DB** once they exist on the portal, and **Push to Portal** makes their queue appear in the portal (and removes dropped songs)
+- [ ] Manual end-to-end: a singer deletes a request on the portal, the host queue row disappears on the next poll, and the portal row is deleted after the ack

@@ -255,6 +255,7 @@ void PortalClient::pollRequests()
                 object.value(QStringLiteral("requests")).toArray().toVariantList();
             const QVariantList updates =
                 object.value(QStringLiteral("updates")).toArray().toVariantList();
+            const QJsonArray removals = object.value(QStringLiteral("removals")).toArray();
 
             setError(QString());
             if (!requests.isEmpty()) {
@@ -263,6 +264,13 @@ void PortalClient::pollRequests()
             }
             if (!updates.isEmpty())
                 emit queueUpdatesReceived(updates);
+            if (!removals.isEmpty()) {
+                QStringList ids;
+                ids.reserve(removals.size());
+                for (const QJsonValue &value : removals)
+                    ids.append(value.toString());
+                emit removalsReceived(ids);
+            }
         }
 
         reply->deleteLater();

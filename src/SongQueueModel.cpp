@@ -464,6 +464,27 @@ QVariantList SongQueueModel::songsForSinger(const QString &singer) const
     return songs;
 }
 
+void SongQueueModel::removeByPortalRequestId(const QString &portalRequestId)
+{
+    if (portalRequestId.isEmpty())
+        return;
+
+    int removed = 0;
+    for (int i = m_songs.size() - 1; i >= 0; --i) {
+        if (m_songs.at(i).portalRequestId == portalRequestId) {
+            m_songs.removeAt(i);
+            ++removed;
+        }
+    }
+    if (removed == 0)
+        return;
+
+    beginResetModel();
+    rebuildVisible();
+    endResetModel();
+    persist();
+}
+
 void SongQueueModel::applyPortalPlayed(const QString &portalRequestId, bool played)
 {
     if (portalRequestId.isEmpty())
